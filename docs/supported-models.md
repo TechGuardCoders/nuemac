@@ -14,7 +14,8 @@ macOS itself need memory beyond the weights. Each model's recipe lists its measu
 ## Engine requirements
 
 - macOS 14+, Apple Silicon. On 16 GB Macs, raise the GPU limit (`sudo sysctl iogpu.wired_limit_mb=14500`).
-- oMLX from Homebrew (`brew install jundot/omlx/omlx`) provides MLX, mlx-lm and the upstream model code.
+- oMLX from Homebrew (`brew tap jundot/omlx https://github.com/jundot/omlx && brew install jundot/omlx/omlx`; the
+  installer does this) provides MLX, mlx-lm and the upstream model code.
   Nuemac runs with oMLX's Python, isolated (`python -I`), and does not use oMLX's server.
 
 ## Next candidates

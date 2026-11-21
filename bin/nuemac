@@ -37,7 +37,7 @@ installed() { omlx_python >/dev/null && [ -f "$PREFIX/models/$MODEL_DIR/.verifie
 
 cmd_serve() {
   load_model
-  local py; py="$(omlx_python)" || die "oMLX missing (brew install jundot/omlx/omlx), or re-run the installer"
+  local py; py="$(omlx_python)" || die "oMLX missing: brew tap jundot/omlx https://github.com/jundot/omlx && brew install jundot/omlx/omlx (or re-run the installer)"
   installed || die "model $MODEL_KEY is not installed; run: nuemac use $MODEL_KEY"
   # shellcheck disable=SC2086
   exec "$py" -I "$SRC/engine/server.py" --model "$PREFIX/models/$MODEL_DIR" --alias "$MODEL_ID" \

@@ -124,8 +124,10 @@ fetch() { # url dest sha256
 # ---- 3. engine: oMLX's Python stack (MLX, mlx-lm, the model code) ------------------------------
 b "Engine"
 if ! omlx_python >/dev/null; then
-  echo "  installing oMLX from Homebrew (brew install jundot/omlx/omlx)"
-  "$BREW" install jundot/omlx/omlx
+  # oMLX's formula lives in github.com/jundot/omlx (not the default homebrew-omlx name), so tap it by URL first.
+  echo "  installing oMLX from Homebrew (tap jundot/omlx from github.com/jundot/omlx)"
+  "$BREW" tap jundot/omlx https://github.com/jundot/omlx || die "could not add the jundot/omlx Homebrew tap"
+  "$BREW" install jundot/omlx/omlx || die "brew install jundot/omlx/omlx failed"
 fi
 PY="$(omlx_python)" || die "oMLX installed but its Python was not found"
 HAVE="$("$PY" -I -c 'import importlib.metadata as m; print(m.version("omlx"))' 2>/dev/null || echo unknown)"
