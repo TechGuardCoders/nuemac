@@ -87,12 +87,13 @@ check_wired() {
   local mem_mb lim need
   mem_mb=$(( $(sysctl -n hw.memsize) / 1048576 ))
   lim=$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)
-  need=${GPU_MB:-$(( MODEL_BYTES / 1048576 + 2000 ))}
+  need=$(( ${GPU_MB:-$(( MODEL_BYTES / 1048576 + 2000 ))} + 800 ))
   if [ "$lim" -eq 0 ]; then lim=$(( mem_mb * 2 / 3 )); fi   # macOS default for <= 36 GB machines
+  [ "$mem_mb" -ge "${MIN_MEM_MB:-15000}" ] || echo "warning: $MODEL_KEY is built for Macs with more memory than this one."
   if [ "$lim" -lt "$need" ]; then
     echo "warning: the GPU may use only ~$lim MB; $MODEL_KEY needs ~$need MB."
     echo "         raise it (resets at reboot unless you installed the boot fix):"
-    echo "         sudo sysctl iogpu.wired_limit_mb=14500"
+    echo "         sudo sysctl iogpu.wired_limit_mb=$need"
   fi
 }
 

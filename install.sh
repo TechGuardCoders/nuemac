@@ -5,7 +5,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/TechGuardCoders/nuemac/main/install.sh | bash
 #
 # Options:
-#   --model NAME        model to install (default inkling-2-mini; list: docs/supported-models.md)
+#   --model NAME        model to install (default: inkling-2-mini on 16 GB Macs, inkling-2-mini-oq3e on 24 GB+;
+#                       list: docs/supported-models.md)
 #   --prefix DIR        install here (default ~/.nuemac)
 #   --port N            server port (default 8080, loopback only)
 #   --no-start          install only, don't start the server
@@ -17,7 +18,7 @@ set -euo pipefail
 REPO="TechGuardCoders/nuemac"
 BRANCH="${NUEMAC_BRANCH:-main}"
 PREFIX="${NUEMAC_PREFIX:-$HOME/.nuemac}"
-MODEL="inkling-2-mini"; PORT=""; START=1; WIRED=1; ADDPATH=1; DRY=0
+MODEL=""; PORT=""; START=1; WIRED=1; ADDPATH=1; DRY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --model|--models) MODEL="$2"; shift ;;
@@ -52,6 +53,10 @@ OSMAJ="$(sw_vers -productVersion | cut -d. -f1)"
 MEM_MB=$(( $(sysctl -n hw.memsize) / 1048576 ))
 [ "$MEM_MB" -ge 15000 ] || die "needs 16 GB of memory or more"
 echo "Mac        $(sysctl -n machdep.cpu.brand_string), $((MEM_MB / 1024)) GB, macOS $(sw_vers -productVersion)"
+# Default model by memory: the 16 GB build (96K) or, with 24 GB or more, the 24 GB build (256K).
+if [ -z "$MODEL" ]; then
+  if [ "$MEM_MB" -ge 23000 ]; then MODEL="inkling-2-mini-oq3e"; else MODEL="inkling-2-mini"; fi
+fi
 BREW="$(command -v brew || { [ -x /opt/homebrew/bin/brew ] && echo /opt/homebrew/bin/brew; } || true)"
 if [ -z "$BREW" ] && ! omlx_python >/dev/null; then
   die "Nuemac runs on oMLX's Python stack, installed with Homebrew. Install Homebrew first:
@@ -73,6 +78,7 @@ CONF="$SRC_IN/models/$MODEL.conf"
 # shellcheck disable=SC1090
 . "$CONF"
 DEST="$PREFIX/models/$MODEL_DIR"
+[ "$MEM_MB" -ge "${MIN_MEM_MB:-15000}" ] || die "$MODEL needs a Mac with $(( ${MIN_MEM_MB:-15000} / 1000 + 1 )) GB of memory or more"
 
 # An earlier install of this model by the inkling2-mini-mac-recipe (mini-llm): reuse its verified files.
 OLD="$HOME/.mini-llm/models/$MODEL_DIR"
@@ -153,21 +159,25 @@ else
   echo "$MODEL_REPO@$MODEL_REV" > "$DEST/.verified"
 fi
 
-# ---- 5. GPU memory limit (16 GB Macs) ---------------------------------------------------------
-# macOS lets the GPU wire only ~2/3 of memory by default (~10.7 GB on 16 GB). This model needs ~14 GB.
+# ---- 5. GPU memory limit ---------------------------------------------------------------------
+# macOS lets the GPU wire only ~2/3 of memory by default (~10.7 GB on 16 GB, ~16 GB on 24 GB). Each model's conf
+# says how much it needs (GPU_MB); the limit is raised to that plus a little slack.
+WANT=$(( ${GPU_MB:-13700} + 800 ))
 LIM="$(sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0)"
-if [ "$WIRED" = 1 ] && [ "$MEM_MB" -le 17000 ] && [ "$LIM" -lt 14500 ]; then
+EFF="$LIM"; [ "$EFF" -gt 0 ] || EFF=$(( MEM_MB * 2 / 3 ))
+if [ "$WIRED" = 1 ] && [ "$EFF" -lt "$WANT" ]; then
   b "GPU memory limit"
-  echo "  On a 16 GB Mac the GPU may use only ~10.7 GB by default; this setup needs 14.5 GB."
+  echo "  The GPU may use only ~$EFF MB now; $MODEL needs $WANT MB."
   echo "  Raising it needs your password (sudo). Close other big apps while the model runs."
-  if ask "  Raise it to 14500 MB now?"; then
-    sudo sysctl iogpu.wired_limit_mb=14500 < /dev/tty
+  if ask "  Raise it to $WANT MB now?"; then
+    sudo sysctl iogpu.wired_limit_mb="$WANT" < /dev/tty
     if ask "  Keep it after reboot (installs a small boot job in /Library/LaunchDaemons)?"; then
-      sudo tee /Library/LaunchDaemons/com.nuemac.wiredlimit.plist > /dev/null < "$PREFIX/nuemac/support/com.nuemac.wiredlimit.plist"
+      sed "s/iogpu.wired_limit_mb=[0-9]*/iogpu.wired_limit_mb=$WANT/" "$PREFIX/nuemac/support/com.nuemac.wiredlimit.plist" |
+        sudo tee /Library/LaunchDaemons/com.nuemac.wiredlimit.plist > /dev/null
       sudo launchctl bootstrap system /Library/LaunchDaemons/com.nuemac.wiredlimit.plist 2>/dev/null || true
     fi
   else
-    echo "  Skipped. Before starting, run:  sudo sysctl iogpu.wired_limit_mb=14500"
+    echo "  Skipped. Before starting, run:  sudo sysctl iogpu.wired_limit_mb=$WANT"
   fi
 fi
 

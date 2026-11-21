@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Raises the GPU wired-memory limit at boot so a 14 GB model fits on a 16 GB Mac.
-     Remove: sudo launchctl bootout system/com.nuemac.wiredlimit; sudo rm /Library/LaunchDaemons/com.mini-llm.wiredlimit.plist -->
+<!-- Raises the GPU wired-memory limit at boot to what the installed model needs
+     (the installer writes the value from the model's GPU_MB).
+     Remove: sudo launchctl bootout system/com.nuemac.wiredlimit; sudo rm /Library/LaunchDaemons/com.nuemac.wiredlimit.plist -->
 <plist version="1.0"><dict>
   <key>Label</key><string>com.nuemac.wiredlimit</string>
   <key>ProgramArguments</key><array>

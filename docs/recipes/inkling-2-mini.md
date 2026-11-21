@@ -243,6 +243,34 @@ tokens. It is slow to read that much on this GPU: a 94K-token prompt took 42.6 m
 (37 tok/s average prefill), and decode at that depth was 11.2 tok/s. Prompts up to a few thousand tokens start
 in seconds.
 
+## 24 GB M4 Pro: 256K context
+
+On a Mac mini M4 Pro (16-core GPU, 24 GB, macOS 26.6) the same engine runs a larger quant with a longer window.
+Nothing in the family changes; only the model conf does
+([`models/inkling-2-mini-oq3e.conf`](../../models/inkling-2-mini-oq3e.conf)). Both candidates were measured in
+one session with the same bench (2026-11-21):
+
+| same bench, M4 Pro 24 GB | **oQ3e, 256K** (shipped) | oQ4e, 128K |
+| --- | --- | --- |
+| weights | 12.1 GiB | 15.0 GiB |
+| decode, short prompt | **35.6 tok/s** | 34.5 tok/s |
+| prefill, 4K / 16K prompt | 319 / 301 tok/s | 314 / 301 tok/s |
+| 32K prompt: first token / decode | 115 s / **29.4 tok/s** | 116 s / 26.2 tok/s |
+| 120K prompt: first token / decode | 9.2 min / **21.4 tok/s** | 9.3 min / 19.9 tok/s |
+| fact planted at 32K and at 120K | found, found | found, found |
+| 12 known-answer questions | 12/12 | 12/12 |
+| system memory free under load | 17-19% | 14-15% |
+
+- **oQ3e wins on every row.** It is smaller, so it decodes faster, and it leaves room for twice the context.
+  The 12 questions and two needles did not separate the two quants; a larger quality set might.
+- **Against the 16 GB build:** 1.5x decode (35.6 vs 23.5), 1.7x prefill, and 2.7x the context.
+- **The engine's fixed cost shows more on a faster GPU.** Stock oMLX (MTP off, 16K window, the same weights)
+  decoded at 39.9 tok/s, about 11% faster than Nuemac at short context; on the base M4 the gap is ~5%. Each
+  token costs the same few milliseconds of cache bookkeeping whatever the chip, so it is a larger share at
+  28 ms per token than at 43. Stock oMLX's full-history cache (~192 KB per token) would fit only ~45K tokens on 24 GB, by
+  that arithmetic. Trimming the overhead is the next engine lead.
+- The drafter sweep on this chip has not been run yet (the attempt raced oMLX's model unload).
+
 ## Ideas not tried
 
 - An 8-bit prefill kernel. Prefill falls from 190 to 135 tok/s by 94K, partly because every
@@ -252,6 +280,6 @@ in seconds.
   quality cost.
 - Operator fusion for the `inkling2_loop` graph in llama.cpp, the real fix for its per-operation overhead
   (upstream work).
-- More GPU: an M4 Pro (273 GB/s, 16-20 GPU cores) should clear 30 tok/s.
+- More GPU: done, see [24 GB M4 Pro](#24-gb-m4-pro-256k-context) (35.6 tok/s with the oQ3e build).
 - Engines checked and not usable here today: TensorFold 1.3.2 runs Inkling 2 Small on CUDA only; sushi 1.7
   serves four other model families.

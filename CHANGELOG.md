@@ -1,6 +1,14 @@
 # Changelog
 
-Speeds are a base Mac mini M4 (10-core GPU, 16 GB) at 96K context, from `nuemac bench`.
+Speeds are from `nuemac bench`: a base Mac mini M4 (10-core GPU, 16 GB) at 96K context unless a line says otherwise.
+
+## 0.3.1 - 2026-11-21: 24 GB Macs
+
+- New model `inkling-2-mini-oq3e`: Inkling 2 Mini oQ3e at 256K context for 24 GB Macs. On a Mac mini M4 Pro
+  (16-core GPU, 24 GB): 35.6 tok/s decode, 319/301 tok/s prefill, 29.4 tok/s at 32K, 21.4 at 120K, 12/12, both
+  needles found. The installer picks it by default on Macs with 24 GB or more.
+- The GPU-limit step uses each model's need (`GPU_MB` in its conf) instead of a fixed 14.5 GB, and the boot job
+  keeps that value. Models can set a minimum memory (`MIN_MEM_MB`).
 
 ## 0.3.0 - 2026-11-21: Nuemac
 

@@ -64,9 +64,12 @@ telemetry and no per-token bill.
 
 ## Supported models
 
-| Model | Machine checked | Speed (base M4, 16 GB) | Recipe |
+| Model | Machine checked | Speed | Recipe |
 | --- | --- | --- | --- |
-| **Inkling 2 Mini** (Thinking Machines), MLX oQ2.5e, 96K context | Mac mini M4, 16 GB | **23.5 tok/s** decode, 186 tok/s prefill, 18.8 tok/s at 32K | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
+| **Inkling 2 Mini** (Thinking Machines), MLX oQ2.5e, 96K context: `inkling-2-mini` | Mac mini M4, 16 GB | **23.5 tok/s** decode, 186 tok/s prefill, 18.8 tok/s at 32K | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
+| **Inkling 2 Mini**, MLX oQ3e, 256K context: `inkling-2-mini-oq3e` | Mac mini M4 Pro, 24 GB | **35.6 tok/s** decode, 319 tok/s prefill, 29.4 tok/s at 32K, 21.4 at 120K | [inkling-2-mini, 24 GB](docs/recipes/inkling-2-mini.md#24-gb-m4-pro-256k-context) |
+
+The installer picks the build for your Mac's memory: the 16 GB build below 24 GB, the 256K build at 24 GB or more.
 
 Pinned downloads, memory needs and limits: [docs/supported-models.md](docs/supported-models.md). How a model
 gets here: [adding a family](docs/recipes/adding-a-family.md).
@@ -102,11 +105,12 @@ What Nuemac does for this model (details and every experiment in the [recipe](do
 
 ## Requirements
 
-- Apple Silicon Mac, 16 GB or more, macOS 14 or newer, ~14 GB free disk.
+- Apple Silicon Mac, 16 GB or more, macOS 14 or newer, ~14 GB free disk (~16 GB for the 24 GB build).
 - [Homebrew](https://brew.sh). The installer adds [oMLX](https://github.com/jundot/omlx) from its tap for MLX,
   mlx-lm and the model code Nuemac runs on.
-- On 16 GB, the GPU memory limit raised to 14.5 GB (macOS allows ~10.7 GB by default). The installer asks
-  before running `sudo sysctl iogpu.wired_limit_mb=14500`, and can keep it after reboot.
+- The GPU memory limit raised to what the model needs: 14.5 GB on 16 GB Macs (macOS allows ~10.7 GB by
+  default), 19.3 GB for the 256K build on 24 GB (default ~16 GB). The installer asks before running
+  `sudo sysctl iogpu.wired_limit_mb=...`, and can keep it after reboot.
 - Close big apps while it runs. A Docker VM holding 10 GB will not leave room.
 
 ## What the installer does
