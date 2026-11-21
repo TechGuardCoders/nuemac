@@ -233,7 +233,36 @@ A draft model should cut graph steps. Inkling 2 Mini ships with one: Thinking Ma
   21-24 tok/s; depth 2 gives 25.7 on code and 19.8 on prose; adaptive gives 21-25. Without the drafter it is
   24.8.
 
-So the recipe ships without a drafter. ~25 tok/s at short context is close to this chip's bandwidth ceiling
+On the **M4 Pro** (stock oMLX, oQ3e, temperature 0, 400 tokens, one fresh server per setting):
+
+| setting | essay | code | prose (TCP) | accepted | tokens per verify |
+| --- | --- | --- | --- | --- | --- |
+| drafter off | **41.6** | **41.4** | **40.8** | | |
+| depth 1 | 33.2 | 38.2 | 32.3 | 51-76% | 1.52-1.77 |
+| depth 2 | 29.6 | 40.5 | 31.2 | 48-75% | 1.73-2.35 |
+| depth 3 | 26.8 | 38.6 | 27.7 | 49-72% | 1.86-2.65 |
+| adaptive | 32.6 | 40.8 | 32.6 | | |
+
+The drafter itself is cheap (under 1 ms per cycle). The verify pass is not: checking 2, 3 or 4 tokens costs
+1.92x, 2.39x and 2.83x a decode step, so each setting needs more tokens per verify than it gets. Timing the
+target alone in Nuemac (2K context) shows where:
+
+| one target pass over L new tokens | L=1 | L=2 | L=3 | L=4 |
+| --- | --- | --- | --- | --- |
+| whole model | 32.0 ms | 52.7 | 64.9 | 77.8 |
+| without the MoE | 22.0 | 34.9 | 38.2 | 41.3 |
+| experts (difference) | 10.0 | 17.7 | 26.8 | 36.5 |
+
+- Experts grow linearly, ~9 ms per token: with 128 experts and 8 per token, each extra token reads new experts.
+- The rest jumps 13 ms from one token to two, then adds ~3 ms per token. Most of that jump is in the loop
+  passes (layers 6-17's second and third visits): the loop-controller mixing and other small ops leave their
+  single-token kernels. MLX's batched matmul is slowest at exactly two rows (42 us vs 14 us for the
+  controller's down projection).
+- Attention is a small part. A per-row path that reuses the single-token kernels (exact against sequential
+  decode) took a 2-token verify from 53.3 to 50.1 ms.
+
+Even with that jump removed, depth 1 would gain ~15% on code and nothing on prose, because prose accepts too
+few drafts. So the recipe ships without a drafter. ~25 tok/s at short context is close to this chip's bandwidth ceiling
 for these weights; 30 would take a lower-bit (lossier) quant or a faster chip.
 
 ## Long context
@@ -269,7 +298,7 @@ one session with the same bench (2026-11-21):
   token costs the same few milliseconds of cache bookkeeping whatever the chip, so it is a larger share at
   28 ms per token than at 43. Stock oMLX's full-history cache (~192 KB per token) would fit only ~45K tokens on 24 GB, by
   that arithmetic. Trimming the overhead is the next engine lead.
-- The drafter sweep on this chip has not been run yet (the attempt raced oMLX's model unload).
+- The drafter does not pay on this chip either; see [Speculative decoding](#speculative-decoding-the-drafter).
 
 ## Ideas not tried
 
