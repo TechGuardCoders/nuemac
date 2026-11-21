@@ -2,6 +2,13 @@
 
 Speeds are from `nuemac bench`: a base Mac mini M4 (10-core GPU, 16 GB) at 96K context unless a line says otherwise.
 
+## 0.3.2 - 2026-11-21
+
+- Fix: multi-step tool use. OpenAI clients send an assistant tool call's arguments back as a JSON string; Inkling's
+  chat template raised on that and the server dropped the connection, so agents (Hermes) failed on the turn after
+  their first tool call. The server now parses those arguments before applying the template.
+- Errors in a request now come back as an HTTP 500 with the message instead of a dropped connection.
+
 ## 0.3.1 - 2026-11-21: 24 GB Macs
 
 - New model `inkling-2-mini-oq3e`: Inkling 2 Mini oQ3e at 256K context for 24 GB Macs. On a Mac mini M4 Pro

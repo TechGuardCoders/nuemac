@@ -28,7 +28,7 @@ from mlx_lm.sample_utils import make_sampler  # noqa: E402
 
 from families import ContextFull, for_model  # noqa: E402
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 log = logging.getLogger("nuemac")
 
 class Engine:
@@ -242,6 +242,32 @@ def timings(stats):
                                   "cache_n")}
 
 
+def canonical_messages(msgs):
+    """OpenAI clients send an assistant tool call's arguments as a JSON string; chat templates such as
+    Inkling's want the parsed object (and raise otherwise). Parse them; text that isn't JSON is kept under "raw"."""
+    out = []
+    for m in msgs:
+        calls = m.get("tool_calls") if isinstance(m, dict) else None
+        if calls:
+            m = dict(m)
+            fixed = []
+            for c in calls:
+                fn = (c or {}).get("function") or {}
+                args = fn.get("arguments")
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args.strip() else {}
+                    except ValueError:
+                        args = {"raw": args}
+                    if not isinstance(args, dict):
+                        args = {"value": args}
+                    c = dict(c, function=dict(fn, arguments=args))
+                fixed.append(c)
+            m["tool_calls"] = fixed
+        out.append(m)
+    return out
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "nuemac/" + __version__
@@ -250,6 +276,7 @@ class Handler(BaseHTTPRequestHandler):
         log.info("%s %s", self.address_string(), fmt % args)
 
     def _json(self, code, obj):
+        self._started = True
         data = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -283,6 +310,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.chat(body)
         except ContextFull as e:
             return self._json(400, {"error": {"message": str(e), "type": "exceed_context_size_error"}})
+        except Exception as e:  # noqa: BLE001  answer with an error instead of dropping the connection
+            log.exception("request failed")
+            if not getattr(self, "_started", False):
+                return self._json(500, {"error": {"message": f"{type(e).__name__}: {e}", "type": "server_error"}})
+            return None
         return self._json(404, {"error": {"message": "not found"}})
 
     # llama-server style raw completion (used by the bench)
@@ -304,7 +336,7 @@ class Handler(BaseHTTPRequestHandler):
         kwargs = dict(body.get("chat_template_kwargs") or {})
         if body.get("reasoning_effort") and "reasoning_effort" not in kwargs:
             kwargs["reasoning_effort"] = body["reasoning_effort"]
-        msgs = body.get("messages") or []
+        msgs = canonical_messages(body.get("messages") or [])
         tools = body.get("tools") or None
         text = ENGINE.tok.apply_chat_template(msgs, tools=tools, add_generation_prompt=True,
                                               tokenize=False, **kwargs)
@@ -353,6 +385,7 @@ class Handler(BaseHTTPRequestHandler):
             return True
 
         if stream:
+            self._started = True
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
