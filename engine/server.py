@@ -1,20 +1,14 @@
-"""inkserve: Inkling 2 Mini at long context on a 16 GB Mac.
+"""Nuemac: a single-stream local LLM server for memory-tight Apple Silicon Macs.
 
-A single-stream HTTP server over oMLX's Inkling 2 model code (MLX), with the
-cache layout a 16 GB Mac needs:
+The engine (this file) is model-agnostic: chunked prefill that computes logits
+for the last position only, pipelined decode, multi-turn cache reuse (snapshot
+at the end of each prompt), and llama-server + OpenAI compatible HTTP APIs.
+A model family (engine/families/<name>/) supplies the model-specific parts:
+loading and patching, the KV-cache layout and kernels, stop tokens and the
+output parser. One request runs at a time.
 
-- the 40 sliding-window layer visits keep only their last 1,024 keys
-  (oMLX keeps every key on all 48 visits, ~192 KB/token);
-- the 8 global visits keep full history as 8-bit affine K/V (group 64),
-  allocated once at --ctx, ~17 KB/token;
-- decode attention on the global visits runs a split-K Metal kernel straight
-  from the 8-bit codes (q8attn.py) once the context passes FLASH_MIN tokens;
-- fewer bytes per token: the loop controllers stay bf16 (oMLX upcasts them to
-  fp32) and the 8-bit output head is requantized to 6 bits (--head-bits).
-
-API: llama-server style /health and /completion (with "timings"), and OpenAI
-style /v1/models and /v1/chat/completions (streaming, reasoning_content,
-tool calls via oMLX's Inkling output parser). One request runs at a time.
+API: /health, /completion (llama-server style, with "timings"), /v1/models and
+/v1/chat/completions (streaming, reasoning_content, tool calls).
 """
 import argparse
 import json
@@ -30,249 +24,28 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import mlx.core as mx  # noqa: E402
-from mlx_lm.models.cache import ArraysCache, CacheList, KVCache  # noqa: E402
 from mlx_lm.sample_utils import make_sampler  # noqa: E402
 
+from families import ContextFull, for_model  # noqa: E402
+
 __version__ = "0.3.0"
-log = logging.getLogger("inkserve")
-
-# Below this many cached keys the plain MLX-ops path decodes faster end to end:
-# the custom kernel's own time is lower at every depth, but on a base M4 it cost
-# ~1.4 ms per token at short context (measured A/B), more than it saves there.
-FLASH_MIN = 12288
-
-class WindowKVCache(KVCache):
-    """Sliding-window visit: keeps the last window-1 keys plus the new ones,
-    contiguous and in order (what oMLX's banded kernels expect)."""
-
-    def __init__(self, window, slack=256):
-        super().__init__()
-        self.window = window
-        self.slack = slack
-        self.n = 0
-
-    def update_and_fetch(self, keys, values):
-        L = keys.shape[2]
-        keep = self.window - 1
-        if self.keys is None or self.n + L > self.keys.shape[2]:
-            B, H, _, D = keys.shape
-            n_old = min(self.n, keep)
-            cap = n_old + L + self.slack
-            nk = mx.zeros((B, H, cap, D), keys.dtype)
-            nv = mx.zeros((B, H, cap, values.shape[3]), values.dtype)
-            if self.keys is not None and n_old:
-                nk[..., :n_old, :] = self.keys[..., self.n - n_old : self.n, :]
-                nv[..., :n_old, :] = self.values[..., self.n - n_old : self.n, :]
-            self.keys, self.values, self.n = nk, nv, n_old
-        self.keys[..., self.n : self.n + L, :] = keys
-        self.values[..., self.n : self.n + L, :] = values
-        self.n += L
-        self.offset += L
-        return self.keys[..., : self.n, :], self.values[..., : self.n, :]
-
-    def snapshot(self):
-        return (self.keys, self.values, self.n, self.offset)
-
-    def restore(self, snap):
-        self.keys, self.values, self.n, self.offset = snap
-
-
-class Q8GlobalKVCache(KVCache):
-    """Global visit: full history as 8-bit affine codes, allocated once.
-    Prefill fetches a bf16 copy for the flash kernel; decode reads the codes."""
-
-    bits = 8
-    group = 64
-
-    def __init__(self, max_len):
-        super().__init__()
-        self.max_len = max_len
-        self.kq = None
-
-    def _alloc(self, keys):
-        B, H, _, D = keys.shape
-        w = D * self.bits // 32
-        g = D // self.group
-        z = lambda last, dt: mx.zeros((B, H, self.max_len, last), dt)  # noqa: E731
-        self.kq, self.vq = z(w, mx.uint32), z(w, mx.uint32)
-        self.ks, self.kb = z(g, keys.dtype), z(g, keys.dtype)
-        self.vs, self.vb = z(g, keys.dtype), z(g, keys.dtype)
-        self.dtype = keys.dtype
-
-    def append(self, keys, values):
-        if self.kq is None:
-            self._alloc(keys)
-        a, b = self.offset, self.offset + keys.shape[2]
-        if b > self.max_len:
-            raise ContextFull(f"prompt + reply need {b} tokens; context is {self.max_len}")
-        kq, ks, kb = mx.quantize(keys, group_size=self.group, bits=self.bits)
-        vq, vs, vb = mx.quantize(values, group_size=self.group, bits=self.bits)
-        self.kq[..., a:b, :] = kq
-        self.ks[..., a:b, :] = ks
-        self.kb[..., a:b, :] = kb
-        self.vq[..., a:b, :] = vq
-        self.vs[..., a:b, :] = vs
-        self.vb[..., a:b, :] = vb
-        self.offset = b
-
-    def codes(self):
-        n = self.offset
-        return ((self.kq[..., :n, :], self.ks[..., :n, :], self.kb[..., :n, :]),
-                (self.vq[..., :n, :], self.vs[..., :n, :], self.vb[..., :n, :]))
-
-    def update_and_fetch(self, keys, values):
-        self.append(keys, values)
-        (kq, ks, kb), (vq, vs, vb) = self.codes()
-        k = mx.dequantize(kq, ks, kb, group_size=self.group, bits=self.bits)
-        v = mx.dequantize(vq, vs, vb, group_size=self.group, bits=self.bits)
-        return k.astype(self.dtype), v.astype(self.dtype)
-
-    def snapshot(self):
-        # Codes below offset are never rewritten, so the offset is enough.
-        return self.offset
-
-    def restore(self, snap):
-        self.offset = snap
-
-
-class ContextFull(Exception):
-    pass
-
-
-def q8_decode_attention(q, kc, vc, rel, sink, scale, group, bits):
-    """One query over 8-bit K/V via quantized_matmul (short contexts)."""
-    B, hq, L, D = q.shape
-    hkv = kc[0].shape[1]
-    s = kc[0].shape[2]
-    rep = hq // hkv
-    n = min(rel.shape[-1], s)
-    tail = rel[0, 0, :, :n][:, ::-1]
-    if n < s:
-        tail = mx.concatenate([mx.zeros((hq, s - n), dtype=tail.dtype), tail], -1)
-    qg = (q * scale).reshape(B, hkv, rep, L, D)
-    kc = tuple(mx.expand_dims(x, -3) for x in kc)
-    vc = tuple(mx.expand_dims(x, -3) for x in vc)
-    scores = mx.quantized_matmul(qg, *kc, transpose=True, group_size=group, bits=bits)
-    scores = scores.astype(mx.float32) + tail.reshape(B, hkv, rep, 1, s).astype(mx.float32)
-    sk = sink[0, 0].astype(mx.float32).reshape(B, hkv, rep, 1, 1)
-    p = mx.softmax(mx.concatenate([scores, sk], axis=-1), axis=-1, precise=True)
-    out = mx.quantized_matmul(p[..., :s].astype(q.dtype), *vc, transpose=False,
-                              group_size=group, bits=bits)
-    return out.reshape(B, hq, L, D)
-
-
-def check_omlx(expect):
-    """inkserve leans on oMLX internals: fail early and clearly if they moved."""
-    import importlib.metadata as md
-    import inspect
-
-    have = md.version("omlx")
-    from omlx.patches.inkling2 import model as ink
-
-    sig = list(inspect.signature(ink.Inkling2Attention.attend).parameters)
-    if sig != ["self", "q", "k", "v", "rel", "sink", "kv"] or not hasattr(ink, "kernels"):
-        raise SystemExit(f"oMLX {have}: Inkling2Attention.attend changed ({sig}); "
-                         f"this inkserve was written for oMLX {expect or '0.8.2'}")
-    if expect and have != expect:
-        log.warning("oMLX %s installed; inkserve was tested with %s", have, expect)
-    return have
-
-
-def install_attend_patch():
-    from omlx.patches.inkling2 import model as ink
-    from q8attn import q8_flash_decode
-
-    orig = ink.Inkling2Attention.attend
-
-    def attend(self, q, k, v, rel, sink, kv):
-        if isinstance(kv, Q8GlobalKVCache) and q.shape[0] == 1 and q.shape[2] == 1:
-            kv.append(k, v)
-            if kv.offset > FLASH_MIN:
-                return q8_flash_decode(q, kv, rel, sink, self.scale)
-            kc, vc = kv.codes()
-            return q8_decode_attention(q, kc, vc, rel, sink, self.scale, kv.group, kv.bits)
-        return orig(self, q, k, v, rel, sink, kv)
-
-    ink.Inkling2Attention.attend = attend
-
-
-def install_bf16_loop_patch():
-    """The loop controllers (loop_down, loop_gain_forget) are bf16 weights that
-    oMLX keeps as fp32 copies: ~0.23 GB read per token in the looped layers.
-    Keep them bf16 and run the two small matmuls in bf16 (fp32 accumulation
-    inside the matmul, one bf16 rounding, as the reference does). Greedy tokens
-    were identical to the fp32 path on our checks; decode +0.4 tok/s."""
-    from omlx.patches.inkling2 import model as ink
-
-    def _mix_messages(x, message, down, gain_forget):
-        n, b, length, hidden = x.shape
-        rows = b * length
-        z = mx.stack([ink._unit_rms(x), ink._unit_rms(message)], axis=1)
-        z = z.astype(mx.bfloat16).reshape(2 * n, rows, hidden)
-        low = (z @ down.reshape(2 * n, hidden, -1)).astype(mx.float32)
-        low = low.reshape(n, 2, rows, -1).sum(axis=1).astype(mx.bfloat16)
-        gates = (low @ gain_forget).astype(mx.float32).reshape(n, b, length, 2 * hidden)
-        gain = mx.tanh(gates[..., :hidden])
-        forget = mx.tanh(gates[..., hidden:])
-        return (1.0 - forget) * x + gain * message
-
-    ink._mix_messages = _mix_messages
-
-
-def shrink_weights(model, head_bits):
-    """bf16 loop controllers; optionally requantize the 8-bit output head.
-    6-bit head: mean KL 0.00027 against the 8-bit head (8-bit requantized to
-    itself: 0.00008), top-1 98.9% (99.5%); decode +0.7 tok/s on a base M4."""
-    import mlx.nn as nn
-
-    for layer in model.model.layers:
-        if hasattr(layer, "loop_down"):
-            layer.loop_down = layer.loop_down.astype(mx.bfloat16)
-            layer.loop_gain_forget = layer.loop_gain_forget.astype(mx.bfloat16)
-    head = model.lm_head
-    if head_bits and head_bits != getattr(head, "bits", head_bits):
-        w = mx.dequantize(head.weight, head.scales, head.biases,
-                          group_size=head.group_size, bits=head.bits)
-        q = nn.QuantizedLinear(w.shape[1], w.shape[0], bias=False, group_size=64, bits=head_bits)
-        q.weight, q.scales, q.biases = mx.quantize(w, group_size=64, bits=head_bits)
-        model.lm_head = q
-        del w
-    mx.eval(model.parameters())
-    mx.clear_cache()
-
+log = logging.getLogger("nuemac")
 
 class Engine:
-    def __init__(self, model_path, ctx, prefill_chunk, expect_omlx="", head_bits=6):
-        log.info("inkserve %s on oMLX %s", __version__, check_omlx(expect_omlx))
-        from omlx.utils.model_loading import load_text_model
-
+    def __init__(self, model_path, ctx, prefill_chunk, options=None):
         info = mx.device_info()
         mx.set_wired_limit(int(info["max_recommended_working_set_size"]))
         mx.set_cache_limit(512 * 2**20)
-        install_attend_patch()
-        install_bf16_loop_patch()
+        self.family = for_model(model_path)
+        log.info("nuemac %s, family %s", __version__, self.family.NAME)
         self.model_path = model_path
-        self.model, self.tok = load_text_model(model_path)
-        mx.eval(self.model.parameters())
-        shrink_weights(self.model, head_bits)
+        self.model, self.tok = self.family.load(model_path, options or {})
         self.ctx = ctx
         self.chunk = prefill_chunk
-        self.lock = threading.Lock()
-        args = self.model.args.text if hasattr(self.model.args, "text") else self.model.args
-        self.args = args
-        self.schedule = self.model.model._schedule
         self.cache = None
         self.tokens = []   # tokens whose K/V are in self.cache, in order
-        self.snap = None   # (n_tokens, per-visit state) at the end of the last prompt
-        cfg = json.load(open(os.path.join(model_path, "config.json")))
-        self.model_config = cfg
-        self.stop_ids = set()
-        for t in ("<|content_model_end_sampling|>",):
-            tid = self.tok.convert_tokens_to_ids(t)
-            if isinstance(tid, int) and tid >= 0:
-                self.stop_ids.add(tid)
-        eos = getattr(self.tok, "eos_token_ids", None) or []
-        self.stop_ids.update(int(x) for x in eos)
+        self.snap = None   # (n_tokens, family state) at the end of the last prompt
+        self.stop_ids = self.family.stop_ids(self.tok)
         log.info("loaded %s: %.2f GiB weights, ctx %d, stop ids %s", model_path,
                  mx.get_active_memory() / 2**30, ctx, sorted(self.stop_ids))
 
@@ -282,27 +55,14 @@ class Engine:
         self.tokens = []
         self.snap = None
         mx.clear_cache()
-        out = []
-        for idx, _p in self.schedule:
-            if self.args.is_sliding(idx):
-                kv = WindowKVCache(self.args.sliding_window_size)
-            else:
-                kv = Q8GlobalKVCache(self.ctx)
-            out.append(CacheList(kv, ArraysCache(4)))
-        self.cache = out
+        self.cache = self.family.make_cache(self.model, self.ctx)
 
     def _take_snapshot(self):
-        st = []
-        for c in self.cache:
-            kv, conv = c[0], c[1]
-            st.append((kv.snapshot(), list(conv.cache)))
-        self.snap = (len(self.tokens), st)
+        self.snap = (len(self.tokens), self.family.snapshot(self.cache))
 
     def _restore_snapshot(self):
         n, st = self.snap
-        for c, (kvs, conv) in zip(self.cache, st):
-            c[0].restore(kvs)
-            c[1].cache = list(conv)
+        self.family.restore(self.cache, st)
         self.tokens = self.tokens[:n]
 
     def _reuse(self, ids, allow):
@@ -435,7 +195,7 @@ class ThinkRouter:
 
 ENGINE = None
 WORKER = None
-MODEL_ID = "inkling-2-mini"
+MODEL_ID = "local"
 
 
 class EngineThread(threading.Thread):
@@ -484,7 +244,7 @@ def timings(stats):
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "inkserve/" + __version__
+    server_version = "nuemac/" + __version__
 
     def log_message(self, fmt, *args):
         log.info("%s %s", self.address_string(), fmt % args)
@@ -551,12 +311,10 @@ class Handler(BaseHTTPRequestHandler):
         return ENGINE.tok.encode(text, add_special_tokens=False)
 
     def chat(self, body):
-        from omlx.adapter.output_parser import InklingOutputParserSession
-
         ids = self._prompt_ids(body)
         max_tokens = int(body.get("max_tokens") or body.get("max_completion_tokens") or 4096)
         stream = bool(body.get("stream", False))
-        parser = InklingOutputParserSession(ENGINE.tok, ENGINE.model_path)
+        parser = ENGINE.family.output_parser(ENGINE.tok, ENGINE.model_path)
         router = ThinkRouter()
         cid = "chatcmpl-" + uuid.uuid4().hex[:24]
         created = int(time.time())
@@ -658,14 +416,15 @@ def main():
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--ctx", type=int, default=98304)
     ap.add_argument("--prefill-chunk", type=int, default=256)
-    ap.add_argument("--expect-omlx", default="", help="oMLX version this was tested with")
+    ap.add_argument("--expect-omlx", default="", help="oMLX version the model's recipe was tested with")
     ap.add_argument("--head-bits", type=int, default=6, choices=(4, 5, 6, 8),
-                    help="requantize the 8-bit output head (6: near-lossless, faster)")
+                    help="inkling2: requantize the 8-bit output head (6: near-lossless, faster)")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     global WORKER
     MODEL_ID = a.alias
-    WORKER = EngineThread(a.model, a.ctx, a.prefill_chunk, a.expect_omlx, a.head_bits)
+    WORKER = EngineThread(a.model, a.ctx, a.prefill_chunk,
+                          {"expect_omlx": a.expect_omlx, "head_bits": a.head_bits})
     WORKER.start()
     WORKER.ready.wait()
     if WORKER.error is not None:

@@ -1,30 +1,31 @@
-Inkling 2 Mini on a 16 GB Mac mini: the Tech Guard recipe
+Nuemac
 Copyright 2026 Tech Guard LLC
 
-This product's scripts, configuration and documentation are licensed under the Apache License, Version 2.0
-(see LICENSE). It downloads, configures and benchmarks, but does not include, the third-party works below.
-Each is fetched from its original publisher at a pinned version and checked against a SHA-256 checksum.
+Nuemac's engine, kernels, scripts, configuration and documentation are licensed under the Apache License,
+Version 2.0 (see LICENSE). It downloads and runs, but does not include, the third-party works below. Models
+are fetched from their original publisher at a pinned revision and checked against SHA-256 checksums.
 
 Models
 - Inkling 2 Mini (https://huggingface.co/thinkingmachines/Inkling-2-Mini), by Thinking Machines Lab,
   Apache-2.0.
 - Inkling-2-Mini-oQ2.5e-mtp (https://huggingface.co/mlx-community/Inkling-2-Mini-oQ2.5e-mtp), MLX weights
   by the mlx-community, Apache-2.0, revision d4a4f3f (the drafter file is not downloaded).
-- Inkling-2-Mini-AD-IQ3_XXS.gguf from AtomicChat/Inkling-2-Mini-GGUF
-  (https://huggingface.co/AtomicChat/Inkling-2-Mini-GGUF), Apache-2.0, revision 0926b69.
-- Ternary Bonsai 2 27B (https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf), by PrismML, Apache-2.0,
-  revision 839bd57; derived from Qwen3.8-27B by the Qwen team (Alibaba Cloud).
 
-Engines
+Runtime
 - oMLX (https://github.com/jundot/omlx), Apache-2.0, installed from its Homebrew tap (tested with 0.8.2).
-  engine/inkserve.py runs on oMLX's Python stack and uses its Inkling 2 model code, chat handling and
-  Inkling output parser; it replaces the model's KV caches and the global layers' decode attention.
+  Nuemac runs on oMLX's Python stack and uses its Inkling 2 model code, chat handling and Inkling output
+  parser; engine/families/inkling2 replaces the model's KV caches, the global layers' decode attention and
+  the loop-controller mixing, and requantizes the output head at load.
 - MLX and mlx-lm (https://github.com/ml-explore), MIT, Copyright Apple Inc., as shipped with oMLX.
-- llama.cpp / ggml (https://github.com/ggml-org/llama.cpp), MIT, Copyright (c) 2023-2026 The ggml authors.
-  Prebuilt release b12600 (commit 29b52d3), which added the inkling2_loop architecture (PR #32694).
-- PrismML llama.cpp fork (https://github.com/PrismML-Eng/llama.cpp), MIT, release prism-b10735-842b188,
-  with the ternary PQ2_0 / PTQ1_0 kernels.
 
-Method
+Comparison builds (benchmarked in the docs, not installed by Nuemac)
+- llama.cpp / ggml (https://github.com/ggml-org/llama.cpp), MIT, release b12600, with
+  Inkling-2-Mini-AD-IQ3_XXS.gguf from AtomicChat/Inkling-2-Mini-GGUF (Apache-2.0).
+- PrismML llama.cpp fork (https://github.com/PrismML-Eng/llama.cpp), MIT, with Ternary Bonsai 2 27B by
+  PrismML (Apache-2.0), derived from Qwen3.8-27B by the Qwen team (Alibaba Cloud).
+
+Ideas and method
+- TensorFold (https://github.com/ashhart/TensorFold), MIT: the engine + supported-models + recipes layout.
+- Strata (https://github.com/Niko1221/Strata), MIT: kernel and dispatch ideas evaluated in the recipe.
 - inference-optimisation-skill (https://github.com/sybil-solutions/inference-optimisation-skill), MIT, by
-  Sybil Solutions: the ceilings-first, one-change-per-experiment tuning method behind docs/RECIPE.md.
+  Sybil Solutions: the ceilings-first, one-change-per-experiment tuning method behind docs/recipes.

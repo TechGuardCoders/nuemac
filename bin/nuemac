@@ -1,21 +1,23 @@
 #!/bin/bash
-# mini-llm: run and benchmark local models installed by the recipe.
-# Usage: mini-llm status | start | stop | restart | use <inkling|inkling-gguf|bonsai> | bench [opts] | qa | logs | serve | uninstall
+# nuemac: run and benchmark models on the Nuemac engine.
+# Usage: nuemac status | models | start | stop | restart | use <model> | bench [opts] | qa | logs | serve | uninstall
 set -euo pipefail
 
-PREFIX="${MINI_LLM_PREFIX:-$HOME/.mini-llm}"
-SRC="$PREFIX/recipe"
-LABEL=com.mini-llm.server
+PREFIX="${NUEMAC_PREFIX:-$HOME/.nuemac}"
+SRC="$PREFIX/nuemac"
+LABEL=com.nuemac.server
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 [ -f "$PREFIX/settings" ] && . "$PREFIX/settings"
 PORT="${PORT:-8080}"
 HOST="${HOST:-127.0.0.1}"
+DEFAULT_MODEL=inkling-2-mini
 
-die() { echo "mini-llm: $*" >&2; exit 1; }
-active() { cat "$PREFIX/active" 2>/dev/null || echo inkling; }
+die() { echo "nuemac: $*" >&2; exit 1; }
+active() { cat "$PREFIX/active" 2>/dev/null || echo "$DEFAULT_MODEL"; }
+model_keys() { ls "$SRC/models" | sed 's/\.conf$//'; }
 load_model() {
   local k="${1:-$(active)}"
-  [ -f "$SRC/models/$k.conf" ] || die "unknown model '$k' (have: $(ls "$SRC/models" | sed 's/.conf//' | tr '\n' ' '))"
+  [ -f "$SRC/models/$k.conf" ] || die "unknown model '$k' (supported: $(model_keys | tr '\n' ' '))"
   # shellcheck disable=SC1090
   . "$SRC/models/$k.conf"
 }
@@ -27,32 +29,20 @@ wait_ready() {
     if healthy; then echo " ready"; return 0; fi
     printf "."; sleep 1
   done
-  echo; die "server did not become ready in 4 min; see: mini-llm logs"
+  echo; die "server did not become ready in 4 min; see: nuemac logs"
 }
-
 omlx_python() { for p in /opt/homebrew/opt/omlx/libexec/bin/python /usr/local/opt/omlx/libexec/bin/python; do
   [ -x "$p" ] && { echo "$p"; return 0; }; done; return 1; }
-installed() { # is the loaded model's engine + files present?
-  if [ "${ENGINE_TYPE:-llama}" = mlx ]; then
-    omlx_python >/dev/null && [ -f "$PREFIX/models/$MODEL_DIR/.verified" ]
-  else
-    [ -x "$PREFIX/engines/$ENGINE/llama-server" ] && [ -f "$PREFIX/models/$MODEL_FILE" ]
-  fi
-}
+installed() { omlx_python >/dev/null && [ -f "$PREFIX/models/$MODEL_DIR/.verified" ]; }
 
 cmd_serve() {
   load_model
-  if [ "${ENGINE_TYPE:-llama}" = mlx ]; then
-    local py; py="$(omlx_python)" || die "oMLX missing (brew install jundot/omlx/omlx), or re-run the installer"
-    [ -f "$PREFIX/models/$MODEL_DIR/.verified" ] || die "model $MODEL_DIR missing; run: mini-llm use $MODEL_KEY"
-    exec "$py" -I "$SRC/engine/inkserve.py" --model "$PREFIX/models/$MODEL_DIR" --alias "$MODEL_ID" \
-      --host "$HOST" --port "$PORT" --ctx "${CTX:-98304}" --expect-omlx "${OMLX_VERSION:-}" ${EXTRA_ARGS:-}
-  fi
-  local bin="$PREFIX/engines/$ENGINE/llama-server" model="$PREFIX/models/$MODEL_FILE"
-  [ -x "$bin" ] || die "engine $ENGINE missing; re-run the installer"
-  [ -f "$model" ] || die "model $MODEL_FILE missing; run: mini-llm use $MODEL_KEY"
+  local py; py="$(omlx_python)" || die "oMLX missing (brew install jundot/omlx/omlx), or re-run the installer"
+  installed || die "model $MODEL_KEY is not installed; run: nuemac use $MODEL_KEY"
   # shellcheck disable=SC2086
-  exec "$bin" -m "$model" --alias "$MODEL_ID" --host "$HOST" --port "$PORT" $SERVER_ARGS ${EXTRA_ARGS:-}
+  exec "$py" -I "$SRC/engine/server.py" --model "$PREFIX/models/$MODEL_DIR" --alias "$MODEL_ID" \
+    --host "$HOST" --port "$PORT" --ctx "${CTX:-98304}" --expect-omlx "${OMLX_VERSION:-}" \
+    ${SERVER_ARGS:-} ${EXTRA_ARGS:-}
 }
 
 write_plist() {
@@ -62,8 +52,8 @@ write_plist() {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>$LABEL</string>
-  <key>ProgramArguments</key><array><string>$PREFIX/bin/mini-llm</string><string>serve</string></array>
-  <key>EnvironmentVariables</key><dict><key>MINI_LLM_PREFIX</key><string>$PREFIX</string></dict>
+  <key>ProgramArguments</key><array><string>$PREFIX/bin/nuemac</string><string>serve</string></array>
+  <key>EnvironmentVariables</key><dict><key>NUEMAC_PREFIX</key><string>$PREFIX</string></dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>30</integer>
@@ -89,7 +79,7 @@ cmd_start() {
 cmd_stop() {
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
   for _ in $(seq 30); do listening || { echo "stopped"; return 0; }; sleep 1; done
-  echo "server still listening on $PORT (not started by mini-llm?)"
+  echo "server still listening on $PORT (not started by nuemac?)"
 }
 
 check_wired() {
@@ -110,19 +100,30 @@ cmd_status() {
   local a; a=$(active); load_model "$a"
   echo "prefix    $PREFIX"
   echo "active    $a  ($MODEL_LABEL)"
-  echo "installed $(for f in "$SRC"/models/*.conf; do (. "$f"; installed && printf '%s ' "$MODEL_KEY"); done)"
+  echo "engine    nuemac $(grep -m1 '^__version__' "$SRC/engine/server.py" | cut -d'"' -f2), oMLX $("$(omlx_python 2>/dev/null || echo false)" -I -c 'import importlib.metadata as m; print(m.version("omlx"))' 2>/dev/null || echo missing)"
   echo "gpu limit $(sysctl -n iogpu.wired_limit_mb 2>/dev/null) MB (0 = macOS default)"
   if healthy; then
     echo "server    up  http://$HOST:$PORT/v1  (model id $MODEL_ID)"
   elif listening; then echo "server    loading or busy on port $PORT"
-  else echo "server    stopped  (mini-llm start)"; fi
+  else echo "server    stopped  (nuemac start)"; fi
+}
+
+cmd_models() {
+  local a; a=$(active)
+  printf "%-18s %-10s %-9s %s\n" MODEL STATUS SIZE DESCRIPTION
+  for f in "$SRC"/models/*.conf; do
+    ( . "$f"
+      s="available"; installed && s="installed"; [ "$MODEL_KEY" = "$a" ] && s="$s*"
+      printf "%-18s %-10s %-9s %s\n" "$MODEL_KEY" "$s" "$(awk -v b="$MODEL_BYTES" 'BEGIN{printf "%.1f GB", b/1e9}')" "$MODEL_LABEL" )
+  done
+  echo "(* active)  details: docs/supported-models.md"
 }
 
 cmd_use() {
-  local k="${1:-}"; [ -n "$k" ] || die "usage: mini-llm use <$(ls "$SRC/models" | sed 's/.conf//' | tr '\n' '|' | sed 's/|$//')>"
+  local k="${1:-}"; [ -n "$k" ] || die "usage: nuemac use <$(model_keys | tr '\n' '|' | sed 's/|$//')>"
   load_model "$k"
   if ! installed; then
-    bash "$SRC/install.sh" --prefix "$PREFIX" --models "$k" --no-start --no-wired-limit --no-path
+    bash "$SRC/install.sh" --prefix "$PREFIX" --model "$k" --no-start --no-wired-limit --no-path
   fi
   echo "$k" > "$PREFIX/active"
   cmd_stop >/dev/null
@@ -134,9 +135,9 @@ cmd_logs() { tail -n "${1:-60}" "$PREFIX/logs/server.log"; }
 cmd_uninstall() {
   cmd_stop || true
   rm -f "$PLIST"
-  echo "Removed the login service. To delete the models and engines too:"
+  echo "Removed the login service. To delete the engine and models too:"
   echo "  rm -rf \"$PREFIX\""
-  echo "If you installed the GPU-limit boot fix: sudo launchctl bootout system/com.mini-llm.wiredlimit; sudo rm /Library/LaunchDaemons/com.mini-llm.wiredlimit.plist"
+  echo "If you installed the GPU-limit boot fix: sudo launchctl bootout system/com.nuemac.wiredlimit; sudo rm /Library/LaunchDaemons/com.nuemac.wiredlimit.plist"
 }
 
 c="${1:-status}"; shift || true
@@ -146,11 +147,12 @@ case "$c" in
   stop) cmd_stop ;;
   restart) cmd_stop >/dev/null; cmd_start ;;
   status) cmd_status ;;
+  models) cmd_models ;;
   use) cmd_use "$@" ;;
-  bench) load_model; PORT="$PORT" HOST="$HOST" exec bash "$SRC/bench/bench.sh" "$@" ;;
-  qa) load_model; PORT="$PORT" HOST="$HOST" exec bash "$SRC/bench/bench.sh" --qa-only "$@" ;;
+  bench) load_model; NUEMAC_PREFIX="$PREFIX" PORT="$PORT" HOST="$HOST" exec bash "$SRC/bench/bench.sh" "$@" ;;
+  qa) load_model; NUEMAC_PREFIX="$PREFIX" PORT="$PORT" HOST="$HOST" exec bash "$SRC/bench/bench.sh" --qa-only "$@" ;;
   logs) cmd_logs "$@" ;;
   uninstall) cmd_uninstall ;;
   -h|--help|help) sed -n '2,3p' "$0" | sed 's/^# //' ;;
-  *) die "unknown command '$c' (mini-llm help)" ;;
+  *) die "unknown command '$c' (nuemac help)" ;;
 esac

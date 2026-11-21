@@ -1,24 +1,33 @@
-# How we got here
+# Inkling 2 Mini (`inkling2_loop`) on a 16 GB Mac mini
 
-What we tried to fit Inkling 2 Mini onto a 16 GB M4 Mac mini at 96K context, and why the recipe ships what
-it ships. Measured 2026-11-20/21 on a base Mac mini (M4, 10-core GPU, 16 GB, macOS 26.5). The method:
-measure the ceiling first, change one thing per experiment, run a control on both sides, and stop after
+Nuemac's first family: Thinking Machines' Inkling 2 Mini at 96K context on a base Mac mini (M4, 10-core GPU,
+16 GB, macOS 26.5). This page explains why each choice in [`models/inkling-2-mini.conf`](../../models/inkling-2-mini.conf)
+and [`engine/families/inkling2/`](../../engine/families/inkling2/) is what it is. Measured 2026-11-20/21. The
+method: measure the ceiling first, change one thing per experiment, run a control on both sides, and stop after
 three changes land inside the noise.
 
-There are two builds. The default ([`models/inkling.conf`](../models/inkling.conf)) runs on MLX through our
-small server, `engine/inkserve.py`. The llama.cpp build ([`models/inkling-gguf.conf`](../models/inkling-gguf.conf))
-is the fallback for Macs without Homebrew, and the baseline the MLX build is measured against.
-
-| at 96K context, same bench | MLX build (inkserve) | llama.cpp build |
+| at 96K context, same bench | **Nuemac** | llama.cpp b12600 (AtomicChat AD-IQ3_XXS) |
 | --- | --- | --- |
-| decode, short prompt | **22.4 tok/s** | 17.25 tok/s |
-| prefill, 4K / 16K prompt | **190 / 175 tok/s** | 68 / 61 tok/s |
-| 32K prompt: first token / decode | **202 s / 17.9 tok/s** | 690 s / 12.2 tok/s |
-| 94K prompt: first token / decode | **11.7 min / 15.2 tok/s** | 42.6 min / 11.2 tok/s |
+| decode, short prompt | **23.5 tok/s** | 17.25 tok/s |
+| prefill, 4K / 16K prompt | **186 / 173 tok/s** | 68 / 61 tok/s |
+| 32K prompt: first token / decode | **202 s / 18.8 tok/s** | 690 s / 12.2 tok/s |
+| 94K prompt: first token / decode | **11.8 min / 13.7 tok/s** | 42.6 min / 11.2 tok/s |
 | known-answer questions | 12/12 | 12/12 |
-| memory free under load | ~10% | ~1-2% |
+| memory free under load | ~13% | ~1-2% |
 
-## The MLX build: three fixes to the cache
+## What decides the speed
+
+- 24 layers; layers 6-17 run three times per token, so there are **48 layer passes**. 40 of them are sliding-window
+  attention (1,024 tokens) and 8 are global, with 8 KV heads × 128 dims. Mixture of experts: 128 experts, 8
+  active, expert width 1,152, hidden size 2,304. Vocabulary 201K with a soft-capped head.
+- The weights read per token are 3.35 GB: 1.08 GB of experts (2-bit gate/up, 3-bit down), 1.78 GB of dense
+  layers (8-bit attention projections) and a 0.49 GB head. At the ~111 GB/s this Mac actually reads, that is
+  ~30 ms per token, a ~33 tok/s ceiling at this quantization.
+- A short-context token takes ~43 ms on Nuemac: MoE ~15 ms, attention math ~3 ms, and dense layers, head and
+  small ops ~25 ms. MLX's expert matvecs already run at 79-87 GB/s and the head at 98 GB/s. What's left is
+  mostly bytes and small-op overhead, not kernel speed.
+
+## Three fixes to the cache
 
 MLX runs this looped mixture-of-experts model faster than llama.cpp: [oMLX](https://github.com/jundot/omlx)
 0.8.2 decodes it at 24.8 tok/s against 17.25. Out of the box, though, oMLX fits only about 7K tokens of
@@ -27,25 +36,25 @@ about 2.5 GiB, and the cache was using ~192 KB per token.
 
 1. **Sliding layers keep a window, not the whole history.** Inkling runs 48 layer visits per token (layers
    6-17 three times). 40 of those visits are sliding-window attention over the last 1,024 tokens, but oMLX
-   gives every visit a full-length cache. inkserve gives the sliding visits a 1,024-key window and keeps full
+   gives every visit a full-length cache. Nuemac gives the sliding visits a 1,024-key window and keeps full
    history only on the 8 global visits. The output is token-for-token identical (64 of 64 greedy tokens on a
    prompt longer than the window).
 2. **The 8 global visits store 8-bit keys and values** (affine, group 64), allocated once at the full context:
    1.6 GiB at 96K instead of 3 GiB at bf16. bf16 does fit on paper; in practice it ran out of GPU memory with
    macOS and a few background apps running. Output is still identical to the bf16 reference on the same check.
 3. **A decode kernel that reads the 8-bit cache directly.** Plain MLX ops (`quantized_matmul`) reach only
-   ~23 GB/s on a single query against a long cache: 73 ms per token at 96K across the 8 visits. inkserve's
-   split-K ("flash decoding") Metal kernel, `engine/q8attn.py`, spreads the keys over many threadgroups, one
+   ~23 GB/s on a single query against a long cache: 73 ms per token at 96K across the 8 visits. Nuemac's
+   split-K ("flash decoding") Metal kernel, `engine/families/inkling2/q8attn.py`, spreads the keys over many threadgroups, one
    coalesced 128-byte read per key row, with Inkling's relative-position bias and attention sink folded in:
-   20.3 ms at 96K (~84 GB/s), 7.1 ms at 32K. inkserve uses it once the context passes 12K tokens; below
+   20.3 ms at 96K (~84 GB/s), 7.1 ms at 32K. Nuemac uses it once the context passes 12K tokens; below
    that the plain path decodes faster end to end (see below).
 
 | global attention, one decode step (8 visits) | 16K | 32K | 96K |
 | --- | --- | --- | --- |
 | bf16, MLX SDPA (oMLX's path) | 6.6 ms | 17.3 ms | 65.4 ms |
 | 8-bit, `quantized_matmul` | 6.1 ms | 17.9 ms | 73.2 ms |
-| 8-bit, inkserve kernel, first version | 4.2 ms | 7.9 ms | 22.3 ms |
-| **8-bit, inkserve kernel, current** | **3.9 ms** | **7.1 ms** | **20.3 ms** |
+| 8-bit, Nuemac kernel, first version | 4.2 ms | 7.9 ms | 22.3 ms |
+| **8-bit, Nuemac kernel, current** | **3.9 ms** | **7.1 ms** | **20.3 ms** |
 | reading the same bytes once (floor) | | | 15.4 ms |
 
 ### Tuning the kernel
@@ -76,16 +85,50 @@ even with the 8 visits chained back to back as the model runs them (0.66 against
 Yet in an alternating end-to-end A/B on the server, using it at every depth cost ~0.8 tok/s at short context
 (21.6 against 22.4), while gaining ~0.5 tok/s at 32K. Swapping one piece at a time in one loaded process
 pinned it on the kernel's presence at short context: about 1.4 ms per token, more than its own run time.
-So inkserve switches to it above 12K tokens. With that threshold the end-to-end A/B is neutral: short
+So Nuemac switches to it above 12K tokens. With that threshold the end-to-end A/B is neutral: short
 context 22.36 / 22.41 against 22.50 / 22.38, and 32K decode 17.2 / 17.4 against 17.3 / 17.3. The kernel's
 0.8 ms saving at 32K is inside run-to-run noise. Lesson: measure the whole token, A/B alternating, before
 trusting a kernel benchmark. The one variant that decoded faster at 32K end to end (18.0 / 18.3) was the
 packed-scale cache, which issues fewer small write operations per token. That points at per-operation
 overhead, which is next on the list.
 
+## Fewer bytes per token
+
+Once the kernels were near the floor, the lever was bytes. Profiling a short-context token by ablation (one
+component off per process) and chained microbenchmarks:
+
+| part (48 passes, 1 token) | time | effective speed |
+| --- | --- | --- |
+| expert gate+up, 2-bit (`gather_qmm`) | 8.1 ms | 79 GB/s |
+| expert down, 3-bit | 5.1 ms | 87 GB/s |
+| router + activation + combine | 1.9 ms | |
+| output head, 8-bit, 0.49 GB | 5.0 ms | 98 GB/s |
+
+Two trims, each checked on its own:
+- **Loop controllers in bf16.** oMLX upcast these bf16 weights to fp32 copies, ~0.23 GB read per token. Nuemac
+  keeps them bf16 and runs their two small matmuls in bf16, with fp32 accumulation and one rounding, as the
+  reference does. Greedy tokens were identical on two prompts. Decode +0.4 tok/s.
+- **Output head at 6 bits**, requantized at load (`--head-bits`). Measured by feeding the same hidden states
+  through both heads, 3,072 positions of real text:
+
+| head | size | mean KL vs 8-bit | top-1 agreement | decode |
+| --- | --- | --- | --- | --- |
+| 8-bit requantized to itself (noise floor) | 0.49 GB | 0.00008 | 99.5% | |
+| **6-bit (default)** | 0.38 GB | 0.00027 | 98.9% | +0.7 tok/s |
+| 5-bit | 0.32 GB | 0.00075 | 98.6% | |
+| 4-bit | 0.26 GB | 0.0032 | 96.9% | +1.4 tok/s |
+
+For scale, the whole model's quantization error is on the order of KL 0.05-0.1.
+
+End-to-end A/B, alternating, two runs each: short-context decode 22.39 / 22.45 -> **23.46 / 23.53 tok/s**, 32K
+decode 17.4 / 18.0 -> 18.1 / 18.6. Quality check 12/12 on every run. Skipping the per-pass conv-state copies on
+1-token steps (192 small ops per token) gave only +0.1 tok/s and was left out.
+
+## Why a separate server
+
 Why a separate server rather than a patch to oMLX's: oMLX's batch engine merges every request's cache into
 mlx-lm batch caches and its SSD prefix cache slices caches by token position, and neither fits a window cache.
-inkserve serves one request at a time (as llama.cpp does here with `-np 1`), keeps the cache between turns of a
+Nuemac serves one request at a time (as llama.cpp does here with `-np 1`), keeps the cache between turns of a
 conversation (a new turn only processes its new tokens), and speaks both llama-server's API (`/health`,
 `/completion` with `timings`) and OpenAI's (`/v1/chat/completions` with streaming, `reasoning_content` and tool
 calls through oMLX's own Inkling output parser). Other gotchas on the way:
@@ -101,7 +144,8 @@ disk). The drafter file in that repo is not downloaded: see [the drafter](#specu
 
 ---
 
-The rest of this page is the llama.cpp build: how it fits, and what we learned on the way.
+The rest of this page is the llama.cpp build we compared against: how it fits, and what we learned on the way.
+It installs from [inkling2-mini-mac-recipe](https://github.com/TechGuardCoders/inkling2-mini-mac-recipe).
 
 ## The model in one paragraph
 
@@ -127,7 +171,7 @@ problem is the file plus master, not the conversion. AtomicChat folds the scales
 against 744) and uses IQ4_NL for every `down` tensor.
 
 Lesson: **a speed benchmark will happily measure a broken model.** Our first harness's loop detector did not
-catch it. `mini-llm bench` ends with 12 known-answer questions for that reason.
+catch it. `nuemac bench` ends with 12 known-answer questions for that reason.
 
 ## Memory: what actually fills 16 GB
 
@@ -201,7 +245,7 @@ in seconds.
 
 ## Ideas not tried
 
-- An 8-bit prefill kernel for inkserve. Prefill falls from 190 to 135 tok/s by 94K, partly because every
+- An 8-bit prefill kernel. Prefill falls from 190 to 135 tok/s by 94K, partly because every
   256-token chunk dequantizes the whole global cache for the flash kernel. Reading the 8-bit keys directly, as
   decode does, would remove that copy.
 - Lower-bit attention weights (Q8_0 to Q6_K/Q5_K) for the llama.cpp build: an estimated +6-9% decode, at some

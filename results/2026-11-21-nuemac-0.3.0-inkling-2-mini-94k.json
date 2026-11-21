@@ -1,0 +1,4 @@
+{"model":"inkling-2-mini","label":"Inkling 2 Mini (oQ2.5e MLX) on Nuemac 0.3.0","file":"mlx-community/Inkling-2-Mini-oQ2.5e-mtp@d4a4f3f555fdf6f06102de1865d07e8ac5effe6d","engine":"nuemac 0.3.0 on oMLX 0.8.2","args":"ctx 98304",
+ "machine":{"chip":"Apple M4","gpu_cores":"10","ram_gb":16,"macos":"26.5.1"},
+ "decode_tok_s":23.34,"decode_runs":"23.3","prefill":[],"depth":{"tokens":93791,"prefill_tok_s":133.0,"ttft_s":705,"decode_tok_s":13.7,"needle":"pass"},
+ "qa":"","mem_free_pct":"11%","date":"2026-11-21T17:51:40Z"}

@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Inkling 2 Mini on a Mac mini</title>
-<meta name="description" content="One command to run Inkling 2 Mini with a 96K context on a base 16 GB M4 Mac mini, benchmarked against Ternary Bonsai 2 27B.">
-<meta property="og:title" content="Inkling 2 Mini on a 16 GB Mac mini">
-<meta property="og:description" content="96K context, 22.4 tok/s at 96K context, one command. MLX with a custom Metal kernel.">
-<meta property="og:image" content="https://techguardcoders.github.io/inkling2-mini-mac-recipe/assets/infographic.png">
+<title>Nuemac: private inference at the edge</title>
+<meta name="description" content="Nuemac: private inference at the edge. A local LLM engine that brings 16 GB Macs to life. Inkling 2 Mini at 23.5 tok/s with a 96K context on a base 16 GB M4 Mac mini.">
+<meta property="og:title" content="Nuemac: private inference at the edge">
+<meta property="og:description" content="Inkling 2 Mini at 23.5 tok/s with a 96K context on a base 16 GB M4 Mac mini. One command. MLX with custom Metal kernels.">
+<meta property="og:image" content="https://techguardcoders.github.io/nuemac/assets/infographic.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="assets/tg-monogram.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -105,28 +105,27 @@ footer img{height:16px;opacity:.8}
       <div class="links">
         <a href="#numbers">Numbers</a>
         <a href="#how" class="hide-sm">How it works</a>
-        <a href="https://github.com/TechGuardCoders/inkling2-mini-mac-recipe">GitHub</a>
+        <a href="https://github.com/TechGuardCoders/nuemac">GitHub</a>
       </div>
     </nav>
     <div class="hero">
       <div>
-        <div class="eyebrow">Open recipe · Apple Silicon · MLX</div>
-        <h1>Inkling 2 Mini on a 16 GB Mac mini.</h1>
-        <p class="lede">Thinking Machines' looped mixture-of-experts model with a 96K-token context, on the GPU of a base M4 Mac mini.
-          One command installs it as a local, OpenAI-compatible server: MLX, a rebuilt KV cache and a custom Metal decode kernel. Then benchmark it on your own machine.</p>
+        <div class="eyebrow">Nuemac · private inference at the edge</div>
+        <h1>Bring your Mac to life.</h1>
+        <p class="lede">Nuemac turns the Mac you already own into a private AI machine: big open models with long contexts on a 16 GB Mac mini, served on your own desk as an OpenAI-compatible API. Nothing leaves the machine. First supported model: Thinking Machines' Inkling 2 Mini, with a 96K-token context.</p>
         <div class="install">
-          <code id="cmd"><span class="p">$ </span>curl -fsSL https://raw.githubusercontent.com/TechGuardCoders/inkling2-mini-mac-recipe/main/install.sh | bash</code>
+          <code id="cmd"><span class="p">$ </span>curl -fsSL https://raw.githubusercontent.com/TechGuardCoders/nuemac/main/install.sh | bash</code>
           <button class="copy" id="copy" type="button">Copy</button>
         </div>
-        <div class="sub">Downloads ~11 GB and checks every file's SHA-256. Asks before raising the GPU memory limit. Uses Homebrew for the MLX engine, and falls back to llama.cpp without it.</div>
+        <div class="sub">Installs oMLX (Homebrew) and Nuemac, downloads ~11 GB and checks every file's SHA-256, asks before raising the GPU memory limit.</div>
       </div>
       <div class="stat-card">
-        <div class="big">22.4<small>tok/s</small></div>
-        <div class="k">decode, one user, short prompt · base Mac mini M4 16 GB</div>
+        <div class="big">23.5<small>tok/s</small></div>
+        <div class="k">Inkling 2 Mini decode, one user · base Mac mini M4 16 GB</div>
         <div class="kv">
           <div><b>96K</b><span>context, 8-bit global KV cache</span></div>
           <div><b>12/12</b><span>known-answer check</span></div>
-          <div><b>190</b><span>tok/s prompt reading, 2.8× llama.cpp</span></div>
+          <div><b>186</b><span>tok/s prompt reading, 2.7× llama.cpp</span></div>
           <div><b>$0</b><span>per token, fully offline</span></div>
         </div>
       </div>
@@ -136,19 +135,19 @@ footer img{height:16px;opacity:.8}
 
 <section id="numbers">
   <div class="wrap">
-    <h2>Two engines, two models, one Mac</h2>
-    <p class="intro">Same Mac, 96K context on every build, same benchmark (<code style="font:13px JetBrains Mono,monospace">mini-llm bench --depth 32768</code>), run one model at a time with nothing else loaded.
+    <h2>Inkling 2 Mini: Nuemac against other engines</h2>
+    <p class="intro">Same Mac, 96K context on every build, same benchmark (<code style="font:13px JetBrains Mono,monospace">nuemac bench --depth 32768</code>), run one model at a time with nothing else loaded.
       Speeds are the server's own timings.</p>
     <div class="vs">
-      <div class="model"><div class="tag"><span class="swatch" style="background:var(--bar-a)"></span>Recipe default</div>
-        <h3>Inkling 2 Mini · MLX</h3><p>8 of 128 experts per token, 3× looped middle layers. mlx-community oQ2.5e, 10.9 GB, on inkserve (oMLX model code + our cache and kernel).</p></div>
-      <div class="model"><div class="tag"><span class="swatch" style="background:var(--bar-c)"></span>Fallback</div>
+      <div class="model"><div class="tag"><span class="swatch" style="background:var(--bar-a)"></span>Nuemac</div>
+        <h3>Inkling 2 Mini · Nuemac</h3><p>8 of 128 experts per token, 3× looped middle layers. mlx-community oQ2.5e, 10.9 GB. Window + 8-bit caches, split-K decode kernel, 6-bit head.</p></div>
+      <div class="model"><div class="tag"><span class="swatch" style="background:var(--bar-c)"></span>Comparison</div>
         <h3>Inkling 2 Mini · llama.cpp</h3><p>Same model, AtomicChat AD-IQ3_XXS GGUF, 12.6 GB, on upstream llama.cpp b12600 with a q8_0 cache.</p></div>
       <div class="model"><div class="tag"><span class="swatch" style="background:var(--bar-b)"></span>Comparison</div>
         <h3>Ternary Bonsai 2 27B</h3><p>A dense 27B model (from Qwen3.8-27B) with ternary weights. PQ2_0, 7.2 GB, on PrismML's llama.cpp fork.</p></div>
     </div>
     <div id="metrics"></div>
-    <p class="note">At a nearly full window (a 94K-token prompt) the MLX build answers after 11.7 min and decodes at 15.2 tok/s; llama.cpp takes 42.6 min and decodes at 11.2. All three builds found a fact planted in a 32K prompt. Raw numbers are in <a href="https://github.com/TechGuardCoders/inkling2-mini-mac-recipe/tree/main/results">results/</a>.</p>
+    <p class="note">At a nearly full window (a 94K-token prompt) Nuemac answers after 11.8 min and decodes at 13.7 tok/s; llama.cpp takes 42.6 min and decodes at 11.2. All three found a fact planted in a 32K prompt. Raw numbers: <a href="https://github.com/TechGuardCoders/nuemac/tree/main/results">results/</a>. The comparison builds install from <a href="https://github.com/TechGuardCoders/inkling2-mini-mac-recipe">inkling2-mini-mac-recipe</a>.</p>
   </div>
 </section>
 
@@ -158,23 +157,23 @@ footer img{height:16px;opacity:.8}
     <p class="intro">Each step is in a short shell script you can read before you run it.</p>
     <div class="grid3">
       <div class="card"><div class="n">01</div><h3>Checks your Mac</h3><p>Apple Silicon, macOS 14+, 16 GB, enough disk. <code>--dry-run</code> stops here and prints the plan.</p></div>
-      <div class="card"><div class="n">02</div><h3>Fetches pinned builds</h3><p>oMLX from Homebrew for the MLX build (or a prebuilt llama.cpp release), and the model from Hugging Face at a fixed revision. Every file is checked against its SHA-256, and downloads resume if they drop.</p></div>
+      <div class="card"><div class="n">02</div><h3>Fetches pinned builds</h3><p>oMLX from Homebrew, Nuemac from GitHub, and the model from Hugging Face at a fixed revision. Every file is checked against its SHA-256, and downloads resume if they drop.</p></div>
       <div class="card"><div class="n">03</div><h3>Makes room on the GPU</h3><p>macOS lets the GPU use ~10.7 GB of 16 by default. With your OK it raises that to 14.5 GB, and can keep it after reboot.</p></div>
       <div class="card"><div class="n">04</div><h3>Starts a local server</h3><p>An OpenAI-compatible API on <code>127.0.0.1:8080</code>, started at login and restarted if it crashes. Loopback only.</p></div>
       <div class="card"><div class="n">05</div><h3>Checks the answers</h3><p>Twelve known-answer questions before you trust any speed number. A fast model that outputs garbage is the most common failure.</p></div>
-      <div class="card"><div class="n">06</div><h3>Gives you <code>mini-llm</code></h3><p><code>status</code>, <code>bench</code>, <code>use inkling-gguf</code>, <code>use bonsai</code>, <code>logs</code>. Swap engines or models with one command.</p></div>
+      <div class="card"><div class="n">06</div><h3>Gives you <code>nuemac</code></h3><p><code>status</code>, <code>models</code>, <code>bench</code>, <code>use</code>, <code>logs</code>. New models arrive as families with their own recipes.</p></div>
     </div>
   </div>
 </section>
 
 <section>
   <div class="wrap">
-    <h2>Four things we learned</h2>
-    <p class="intro">The full log, with every experiment and its control, is in <a href="https://github.com/TechGuardCoders/inkling2-mini-mac-recipe/blob/main/docs/RECIPE.md">docs/RECIPE.md</a>.</p>
+    <h2>Four things we learned on Inkling</h2>
+    <p class="intro">The full log, with every experiment and its control, is in <a href="https://github.com/TechGuardCoders/nuemac/blob/main/docs/recipes/inkling-2-mini.md">the Inkling recipe</a>.</p>
     <div class="findings">
       <div class="card"><h3>48 caches where 8 will do</h3><p>Inkling makes 48 layer passes per token, and 40 of them only look back 1,024 tokens. oMLX kept a full-length cache on all 48 (~192 KB per token), so it fit only ~7K tokens. Window caches on those 40 passes give the same output.</p></div>
       <div class="card"><h3>An 8-bit cache needs its own kernel</h3><p>The 8 global passes store 8-bit keys and values (1.6 GB at 96K). Plain MLX ops read them at ~23 GB/s. A split-K Metal kernel reads them at ~84 GB/s: 20 ms per token at 96K instead of 73.</p></div>
-      <div class="card"><h3>Pick the right GGUF</h3><p>For llama.cpp, unsloth's Mainline IQ3_XXS loads and runs fast, but its output is garbage on master (perplexity 43 against 3.26). AtomicChat's AD-IQ3_XXS is correct.</p></div>
+      <div class="card"><h3>Near the floor, cut bytes</h3><p>A token reads 3.35 GB of weights, and MLX's expert matvecs already run at 79-87 GB/s. So the last gain came from bytes: bf16 instead of fp32 loop controllers, and a 6-bit output head (KL 0.0003). +5% decode.</p></div>
       <div class="card"><h3>The drafter works, and doesn't help</h3><p>Inkling's own DSpark draft head is accepted 56-76% of the time on MLX. Checking two tokens still costs ~1.8× one step, because they route to nearly twice the experts. On a base M4 it's a wash.</p></div>
     </div>
   </div>
@@ -191,9 +190,9 @@ curl http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/jso
 }'
 
 <span class="c"># measure your own Mac, then try the other model</span>
-mini-llm bench
-mini-llm use inkling-gguf &amp;&amp; mini-llm bench
-mini-llm use bonsai &amp;&amp; mini-llm bench</pre>
+nuemac bench
+nuemac bench --depth 32768        <span class="c"># adds a needle at 32K</span>
+nuemac models                     <span class="c"># supported models</span></pre>
   </div>
 </section>
 
@@ -211,6 +210,8 @@ mini-llm use bonsai &amp;&amp; mini-llm bench</pre>
       <a href="https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf">PrismML · Ternary Bonsai 2</a>
       <a href="https://github.com/PrismML-Eng/llama.cpp">PrismML · llama.cpp fork</a>
       <a href="https://huggingface.co/Qwen">Qwen · Qwen3.8-27B</a>
+      <a href="https://github.com/ashhart/TensorFold">TensorFold · engine + recipes layout</a>
+      <a href="https://github.com/Niko1221/Strata">Strata · kernel ideas</a>
       <a href="https://github.com/sybil-solutions/inference-optimisation-skill">Sybil Solutions · tuning method</a>
     </div>
   </div>
@@ -218,16 +219,16 @@ mini-llm use bonsai &amp;&amp; mini-llm bench</pre>
 
 <div class="wrap">
   <footer>
-    <span>Apache-2.0 · measured 2026-11-21 · numbers will differ on your Mac: run <code style="font:12px JetBrains Mono,monospace">mini-llm bench</code></span>
+    <span>Apache-2.0 · measured 2026-11-21 · numbers will differ on your Mac: run <code style="font:12px JetBrains Mono,monospace">nuemac bench</code></span>
     <a href="https://github.com/TechGuardCoders"><img src="assets/techguard-wordmark.png" alt="Tech Guard"></a>
   </footer>
 </div>
 
 <script>
 const M = [
-  {name: "Decode", sub: "tok/s, short prompt", v: [22.4, 17.3, 10.9], f: ["22.4", "17.3", "10.9"]},
-  {name: "Prompt reading", sub: "tok/s, 16K-token prompt", v: [175, 61, 55], f: ["175", "61", "55"]},
-  {name: "Decode at 32K", sub: "tok/s, after a 32K prompt", v: [17.9, 12.2, 8.7], f: ["17.9", "12.2", "8.7"]},
+  {name: "Decode", sub: "tok/s, short prompt", v: [23.5, 17.3, 10.9], f: ["23.5", "17.3", "10.9"]},
+  {name: "Prompt reading", sub: "tok/s, 16K-token prompt", v: [173, 61, 55], f: ["173", "61", "55"]},
+  {name: "Decode at 32K", sub: "tok/s, after a 32K prompt", v: [18.8, 12.2, 8.7], f: ["18.8", "12.2", "8.7"]},
   {name: "Wait for first token", sub: "32K prompt, lower is better", v: [202, 690, 647], f: ["202 s", "690 s", "647 s"]},
   {name: "Known-answer check", sub: "12 questions", v: [12, 12, 11], f: ["12/12", "12/12", "11/12"]}
 ];

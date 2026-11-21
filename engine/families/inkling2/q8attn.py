@@ -14,7 +14,7 @@ Pass 2: one thread per (head, dim) merges the partials and the sink.
 
 On a base M4 (16 GB) at 96K tokens, 8 global layer visits read 1.71 GB per
 token in 20.4 ms (~84 GB/s); a plain read of the same bytes takes 15.4 ms.
-inkserve uses it above FLASH_MIN cached keys (see inkserve.py).
+The inkling2 family uses it above FLASH_MIN cached keys (see __init__.py).
 """
 import mlx.core as mx
 

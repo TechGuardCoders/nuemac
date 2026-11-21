@@ -1,0 +1,25 @@
+# Supported models
+
+Which checkpoints Nuemac serves, on which machines, and what each needs. Install Nuemac and a model with the
+[quick start](../README.md). `nuemac models` lists these with their install state. `nuemac use <model>` switches
+to one, downloading it the first time.
+
+"Machine checked" is where the recipe was measured, not a promise for every Mac. Context, the KV cache and
+macOS itself need memory beyond the weights. Each model's recipe lists its measured headroom.
+
+| Model / format | Weights (pinned) | Machine checked and memory | Recipe / limits |
+| --- | --- | --- | --- |
+| **Inkling 2 Mini**, MLX oQ2.5e (mixed 2/3-bit experts, 8-bit attention), 96K context | [`mlx-community/Inkling-2-Mini-oQ2.5e-mtp@d4a4f3f`](https://huggingface.co/mlx-community/Inkling-2-Mini-oQ2.5e-mtp/tree/d4a4f3f555fdf6f06102de1865d07e8ac5effe6d), 10.9 GB (the drafter file is skipped) | Mac mini M4 (10-core GPU), 16 GB, macOS 26.5. GPU wired limit 14.5 GB; ~12 GB in use at 96K; 10-13% system memory free under load. | [inkling-2-mini](recipes/inkling-2-mini.md). Text only (vision and audio towers not wired up). One request at a time. Tested with oMLX 0.8.2; refuses to start if the oMLX internals it patches have changed. |
+
+## Engine requirements
+
+- macOS 14+, Apple Silicon. On 16 GB Macs, raise the GPU limit (`sudo sysctl iogpu.wired_limit_mb=14500`).
+- oMLX from Homebrew (`brew install jundot/omlx/omlx`) provides MLX, mlx-lm and the upstream model code.
+  Nuemac runs with oMLX's Python, isolated (`python -I`), and does not use oMLX's server.
+
+## Next candidates
+
+Families with sliding-window or hybrid attention benefit most from Nuemac's cache layouts on 16-24 GB Macs. A
+model gets a row here only after its recipe passes the quality gate (token match, known-answer questions,
+needle at depth) and an end-to-end A/B against the best existing engine. See
+[adding a family](recipes/adding-a-family.md).

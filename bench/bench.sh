@@ -1,17 +1,17 @@
 #!/bin/bash
-# bench.sh: speed + sanity benchmark for a llama.cpp server. No Python, only what ships with macOS.
-#   mini-llm bench                  decode x5, prefill at ~4K and ~16K tokens, 12 known-answer questions
-#   mini-llm bench --depth 32768    also: a needle in a ~32K-token prompt, decode speed at that depth
-#   mini-llm bench --quick          decode x3 + quality check only
-#   mini-llm qa                     quality check only
+# bench.sh: speed + sanity benchmark for a Nuemac server (any llama-server compatible API). No Python, only what ships with macOS.
+#   nuemac bench                  decode x5, prefill at ~4K and ~16K tokens, 12 known-answer questions
+#   nuemac bench --depth 32768    also: a needle in a ~32K-token prompt, decode speed at that depth
+#   nuemac bench --quick          decode x3 + quality check only
+#   nuemac qa                     quality check only
 # Speeds are the server's own timings (llama.cpp "timings"), so client and HTTP overhead are excluded.
 set -euo pipefail
 
-PREFIX="${MINI_LLM_PREFIX:-$HOME/.mini-llm}"
+PREFIX="${NUEMAC_PREFIX:-$HOME/.nuemac}"
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${PORT:-8080}"; HOST="${HOST:-127.0.0.1}"
 REPS=5; DEPTH=0; QA=1; SPEED=1; PREFILL="4096 16384"
-KEY="$(cat "$PREFIX/active" 2>/dev/null || echo inkling)"
+KEY="$(cat "$PREFIX/active" 2>/dev/null || echo inkling-2-mini)"
 while [ $# -gt 0 ]; do
   case "$1" in
     --model) KEY="$2"; shift ;;
@@ -28,7 +28,7 @@ done
 # shellcheck disable=SC1090
 . "$SRC/models/$KEY.conf"
 URL="http://$HOST:$PORT"
-curl -sf "$URL/health" >/dev/null || { echo "no server on $URL (mini-llm start)" >&2; exit 1; }
+curl -sf "$URL/health" >/dev/null || { echo "no server on $URL (nuemac start)" >&2; exit 1; }
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 
 get() { plutil -extract "$2" raw -o - "$1" 2>/dev/null || true; }
@@ -110,7 +110,7 @@ fi
 mkdir -p "$PREFIX/results"
 OUT="$PREFIX/results/$(date +%Y%m%d-%H%M%S)-$KEY.json"
 cat > "$OUT" <<EOF
-{"model":"$MODEL_KEY","label":"$MODEL_LABEL","file":"${MODEL_FILE:-${MODEL_REPO:-}@${MODEL_REV:-}}","engine":"$ENGINE${OMLX_VERSION:+ $OMLX_VERSION}","args":"${SERVER_ARGS:-ctx ${CTX:-}}",
+{"model":"$MODEL_KEY","label":"$MODEL_LABEL","file":"${MODEL_FILE:-${MODEL_REPO:-}@${MODEL_REV:-}}","engine":"nuemac $(grep -m1 "^__version__" "$SRC/engine/server.py" 2>/dev/null | cut -d\" -f2) ${FAMILY:-} on oMLX ${OMLX_VERSION:-}","args":"${SERVER_ARGS:-ctx ${CTX:-}}",
  "machine":{"chip":"$CHIP","gpu_cores":"${GPU_CORES:-}","ram_gb":$RAM_GB,"macos":"$OS"},
  "decode_tok_s":${DEC:-null},"decode_runs":"${DEC_ALL# }","prefill":[${PF%,}],$DEPTH_JSON
  "qa":"$QA_SCORE","mem_free_pct":"${MEMFREE:-}","date":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
