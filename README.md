@@ -18,6 +18,50 @@ curl -fsSL https://raw.githubusercontent.com/TechGuardCoders/nuemac/main/install
 
 Landing page: <https://techguardcoders.github.io/nuemac/>
 
+## Why Nuemac is different
+
+General-purpose engines like llama.cpp, mlx-lm and oMLX run thousands of models with one shared set of machinery.
+That breadth is their strength. It also leaves memory and speed unused for any single model on a small machine.
+
+Nuemac works the other way round. Each supported model gets its own cache layout, kernels and weight trims,
+designed from that model's architecture and measured on the Mac it targets. Here is what that did for Inkling 2
+Mini, Thinking Machines' 26.4B-parameter looped mixture-of-experts model, within a day of its release.
+
+**Half the memory its makers ask for.** The model card lists "Apple silicon devices with 32GB or more". Nuemac
+runs it on a base 16 GB Mac mini with a 96K-token context, and 10-13% of memory still free under load.
+
+**Long context without giving up speed.** On 16 GB the other paths each gave something up:
+
+| on a 16 GB M4 Mac mini | stock MLX port (oMLX) | llama.cpp | **Nuemac** |
+| --- | --- | --- | --- |
+| longest context that fits | ~7K tokens | 96K | **96K** |
+| decode, short prompt | 24.8 tok/s | 17.3 tok/s | **23.5 tok/s** |
+| prompt reading | ~188 tok/s | 68 tok/s | **186 tok/s** |
+| a 94K-token prompt: first word after | doesn't fit | 42.6 min | **11.8 min** |
+
+**Built around the model's own shape.** Inkling runs its middle layers three times per token: 48 attention passes,
+and 40 of them only ever look back 1,024 tokens. Nuemac keeps full history only for the 8 passes that read it, and
+stores it at 8 bits. A Metal kernel written for exactly this layout, with Inkling's relative-position bias and
+attention sink built in, reads that history straight from the 8-bit codes. At 96K that is 20 ms per token, where
+plain MLX operations took 73 ms. The stock port kept full history on all 48 passes, about 192 KB per token.
+
+**Measured down to the byte.** Profiling a whole token showed the expert kernels already running near the chip's
+bandwidth, so the last gain came from reading less. The loop controllers stay at their native bf16 instead of
+fp32 copies, and the output head is cut to 6 bits after measuring it (KL 0.0003 against the 8-bit head). Together
+that is +5% decode with the same answers.
+
+**Every number can be checked.**
+- A quality gate before any speed claim: 12 known-answer questions, a fact planted at depth, and token-for-token
+  agreement with the reference implementation.
+- An alternating end-to-end A/B for every engine change. One kernel won in isolation but lost on short prompts,
+  so it now only switches on above 12K tokens.
+- The raw results are in [`results/`](results/). The experiments that failed are written up next to the ones that
+  worked, in the [recipe](docs/recipes/inkling-2-mini.md).
+
+**Private by construction.** The server listens on loopback only (`127.0.0.1`). While serving, it held no
+connections beyond its own local clients. Weights are downloaded once, at install. There's no account, no
+telemetry and no per-token bill.
+
 ## Supported models
 
 | Model | Machine checked | Speed (base M4, 16 GB) | Recipe |

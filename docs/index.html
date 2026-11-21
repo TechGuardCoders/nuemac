@@ -77,6 +77,19 @@ section .intro{color:var(--muted);max-width:680px;margin:10px 0 34px}
 .card p{margin:0;color:var(--muted);font-size:14.5px}
 .card code,.findings code{font:12.5px "JetBrains Mono",monospace;background:#161616;border:1px solid var(--line2);padding:1px 5px;border-radius:4px;color:#eee}
 .findings{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.why-hero{display:grid;grid-template-columns:auto 1fr;gap:28px;align-items:center;border:1px solid var(--line2);border-radius:14px;padding:24px 26px;background:linear-gradient(180deg,#0e0e0e,#050505);margin-bottom:26px}
+.why-hero .mem{font:700 56px/1 "Chakra Petch",sans-serif;color:#fff;white-space:nowrap}
+.why-hero .mem s{color:#666;text-decoration-thickness:3px;margin-right:12px}
+.why-hero p{margin:0;color:#c8c8c8}
+.cmp-wrap{overflow-x:auto;border:1px solid var(--line2);border-radius:12px;margin-bottom:26px}
+.cmp{width:100%;border-collapse:collapse;font-size:14.5px;min-width:560px}
+.cmp th,.cmp td{padding:12px 14px;text-align:left;border-bottom:1px solid var(--line)}
+.cmp th{font:600 12px "JetBrains Mono",monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);background:#0a0a0a}
+.cmp td:first-child{color:#ddd}
+.cmp td{color:#9a9a9a}
+.cmp .us{color:#fff;font-weight:600;background:#121212}
+.cmp tr:last-child td{border-bottom:0}
+
 pre{background:var(--panel);border:1px solid var(--line2);border-radius:10px;padding:16px;overflow-x:auto;font:13px/1.65 "JetBrains Mono",monospace;color:#e6e6e6;margin:0}
 pre .c{color:var(--dim)}
 .credits{display:flex;flex-wrap:wrap;gap:10px}
@@ -86,6 +99,8 @@ footer{padding:34px 0 48px;color:var(--dim);font-size:13px;display:flex;justify-
 footer img{height:16px;opacity:.8}
 .hero>*,.vs>*,.grid3>*,.findings>*,.metric>*{min-width:0}
 @media (max-width:860px){
+  .why-hero{grid-template-columns:1fr;gap:12px}
+  .why-hero .mem{font-size:44px}
   .hero{grid-template-columns:minmax(0,1fr);padding:36px 0 48px}
   .vs,.findings{grid-template-columns:1fr}
   .grid3{grid-template-columns:1fr}
@@ -103,7 +118,8 @@ footer img{height:16px;opacity:.8}
     <nav>
       <a href="https://github.com/TechGuardCoders" aria-label="Tech Guard"><img src="assets/techguard-wordmark.png" alt="Tech Guard"></a>
       <div class="links">
-        <a href="#numbers">Numbers</a>
+        <a href="#why">Why it's different</a>
+        <a href="#numbers" class="hide-sm">Numbers</a>
         <a href="#how" class="hide-sm">How it works</a>
         <a href="https://github.com/TechGuardCoders/nuemac">GitHub</a>
       </div>
@@ -126,12 +142,40 @@ footer img{height:16px;opacity:.8}
           <div><b>96K</b><span>context, 8-bit global KV cache</span></div>
           <div><b>12/12</b><span>known-answer check</span></div>
           <div><b>186</b><span>tok/s prompt reading, 2.7× llama.cpp</span></div>
-          <div><b>$0</b><span>per token, fully offline</span></div>
+          <div><b>$0</b><span>per token, runs on your Mac</span></div>
         </div>
       </div>
     </div>
   </div>
 </header>
+
+<section id="why">
+  <div class="wrap">
+    <h2>Not another general-purpose engine</h2>
+    <p class="intro">llama.cpp, mlx-lm and oMLX run thousands of models with one shared set of machinery. That breadth is their strength, and it leaves memory and speed unused for any one model on a small machine. Nuemac gives each supported model its own cache layout, kernels and weight trims, designed from its architecture and measured on the Mac it targets. For Inkling 2 Mini, Thinking Machines' 26.4B-parameter looped mixture of experts, that took a day from release.</p>
+    <div class="why-hero">
+      <div class="mem"><s>32 GB</s>16 GB</div>
+      <p>The model card asks for Apple silicon with 32 GB or more. Nuemac runs it on a base 16 GB Mac mini with a 96K-token context, and 10-13% of memory still free under load.</p>
+    </div>
+    <div class="cmp-wrap">
+      <table class="cmp">
+        <thead><tr><th>16 GB M4 Mac mini</th><th>Stock MLX port</th><th>llama.cpp</th><th class="us">Nuemac</th></tr></thead>
+        <tbody>
+          <tr><td>Longest context that fits</td><td>~7K tokens</td><td>96K</td><td class="us">96K</td></tr>
+          <tr><td>Decode, short prompt</td><td>24.8 tok/s</td><td>17.3 tok/s</td><td class="us">23.5 tok/s</td></tr>
+          <tr><td>Prompt reading</td><td>~188 tok/s</td><td>68 tok/s</td><td class="us">186 tok/s</td></tr>
+          <tr><td>94K-token prompt, first word after</td><td>doesn't fit</td><td>42.6 min</td><td class="us">11.8 min</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="findings">
+      <div class="card"><h3>Built around the model's shape</h3><p>Inkling makes 48 attention passes per token, and 40 only ever look back 1,024 tokens. Nuemac keeps full history for the 8 that read it, at 8 bits, and reads it with a Metal kernel written for this exact layout: 20 ms per token at 96K, against 73 ms with plain MLX ops.</p></div>
+      <div class="card"><h3>Measured down to the byte</h3><p>A whole-token profile showed the expert kernels already near the chip's bandwidth. So the last gain came from reading less: bf16 loop controllers instead of fp32 copies, and a 6-bit output head checked at KL 0.0003. +5% decode, same answers.</p></div>
+      <div class="card"><h3>Every number can be checked</h3><p>A quality gate before any speed claim. Token-for-token checks against the reference, and an alternating A/B for every engine change: one kernel that won in isolation lost on short prompts, so it now only switches on above 12K tokens. Raw results and the failed experiments are published.</p></div>
+      <div class="card"><h3>Private by construction</h3><p>The server listens on 127.0.0.1 only and holds no outside connections while serving. Weights are downloaded once at install. No account, no telemetry, no per-token bill. The Mac on your desk becomes the AI.</p></div>
+    </div>
+  </div>
+</section>
 
 <section id="numbers">
   <div class="wrap">
