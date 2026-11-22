@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nuemac: private inference at the edge</title>
-<meta name="description" content="Nuemac: private inference at the edge. A local LLM engine that brings 16 GB Macs to life. Inkling 2 Mini at 23.5 tok/s with a 96K context on a base 16 GB M4 Mac mini.">
+<meta name="description" content="Nuemac: private inference at the edge. A local LLM engine that brings 16 GB Macs to life. Inkling 2 Mini at 25.9 tok/s with a 96K context on a base 16 GB M4 Mac mini.">
 <meta property="og:title" content="Nuemac: private inference at the edge">
-<meta property="og:description" content="Inkling 2 Mini at 23.5 tok/s with a 96K context on a base 16 GB M4 Mac mini. One command. MLX with custom Metal kernels.">
+<meta property="og:description" content="Inkling 2 Mini at 25.9 tok/s with a 96K context on a base 16 GB M4 Mac mini. One command. MLX with custom Metal kernels.">
 <meta property="og:image" content="https://techguardcoders.github.io/nuemac/assets/infographic.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="assets/tg-monogram.png">
@@ -136,15 +136,15 @@ footer img{height:16px;opacity:.8}
         <div class="sub">Installs oMLX (Homebrew) and Nuemac, downloads ~11 GB and checks every file's SHA-256, asks before raising the GPU memory limit.</div>
       </div>
       <div class="stat-card">
-        <div class="big">23.5<small>tok/s</small></div>
+        <div class="big">25.9<small>tok/s</small></div>
         <div class="k">Inkling 2 Mini decode, one user · base Mac mini M4 16 GB</div>
         <div class="kv">
           <div><b>96K</b><span>context, 8-bit global KV cache</span></div>
           <div><b>12/12</b><span>known-answer check</span></div>
-          <div><b>186</b><span>tok/s prompt reading, 2.7× llama.cpp</span></div>
+          <div><b>191</b><span>tok/s prompt reading, 2.8× llama.cpp</span></div>
           <div><b>$0</b><span>per token, runs on your Mac</span></div>
         </div>
-        <div class="sub" style="margin-top:18px">On a 24 GB Mac mini M4 Pro: <b>35.6 tok/s</b> with a <b>256K</b> context. The installer picks the build for your Mac's memory.</div>
+        <div class="sub" style="margin-top:18px">On a 24 GB Mac mini M4 Pro: <b>42.1 tok/s</b> with a <b>256K</b> context. The installer picks the build for your Mac's memory.</div>
       </div>
     </div>
   </div>
@@ -163,8 +163,8 @@ footer img{height:16px;opacity:.8}
         <thead><tr><th>16 GB M4 Mac mini</th><th>Stock MLX port</th><th>llama.cpp</th><th class="us">Nuemac</th></tr></thead>
         <tbody>
           <tr><td>Longest context that fits</td><td>~7K tokens</td><td>96K</td><td class="us">96K</td></tr>
-          <tr><td>Decode, short prompt</td><td>24.8 tok/s</td><td>17.3 tok/s</td><td class="us">23.5 tok/s</td></tr>
-          <tr><td>Prompt reading</td><td>~188 tok/s</td><td>68 tok/s</td><td class="us">186 tok/s</td></tr>
+          <tr><td>Decode, short prompt</td><td>24.8 tok/s</td><td>17.3 tok/s</td><td class="us">25.9 tok/s</td></tr>
+          <tr><td>Prompt reading</td><td>~188 tok/s</td><td>68 tok/s</td><td class="us">191 tok/s</td></tr>
           <tr><td>94K-token prompt, first word after</td><td>doesn't fit</td><td>42.6 min</td><td class="us">11.8 min</td></tr>
         </tbody>
       </table>
@@ -271,10 +271,10 @@ nuemac models                     <span class="c"># supported models</span></pre
 
 <script>
 const M = [
-  {name: "Decode", sub: "tok/s, short prompt", v: [23.5, 17.3, 10.9], f: ["23.5", "17.3", "10.9"]},
-  {name: "Prompt reading", sub: "tok/s, 16K-token prompt", v: [173, 61, 55], f: ["173", "61", "55"]},
-  {name: "Decode at 32K", sub: "tok/s, after a 32K prompt", v: [18.8, 12.2, 8.7], f: ["18.8", "12.2", "8.7"]},
-  {name: "Wait for first token", sub: "32K prompt, lower is better", v: [202, 690, 647], f: ["202 s", "690 s", "647 s"]},
+  {name: "Decode", sub: "tok/s, short prompt", v: [25.9, 17.3, 10.9], f: ["25.9", "17.3", "10.9"]},
+  {name: "Prompt reading", sub: "tok/s, 16K-token prompt", v: [183, 61, 55], f: ["183", "61", "55"]},
+  {name: "Decode at 32K", sub: "tok/s, after a 32K prompt", v: [20.3, 12.2, 8.7], f: ["20.3", "12.2", "8.7"]},
+  {name: "Wait for first token", sub: "32K prompt, lower is better", v: [197, 690, 647], f: ["197 s", "690 s", "647 s"]},
   {name: "Known-answer check", sub: "12 questions", v: [12, 12, 11], f: ["12/12", "12/12", "11/12"]}
 ];
 const root = document.getElementById('metrics');

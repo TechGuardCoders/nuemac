@@ -2,6 +2,22 @@
 
 Speeds are from `nuemac bench`: a base Mac mini M4 (10-core GPU, 16 GB) at 96K context unless a line says otherwise.
 
+## 0.4.0 - 2026-11-21: less per-token overhead
+
+Lossless decode speed-ups (same greedy tokens), end to end through the server:
+M4 Pro 24 GB 35.9 -> 42.1 tok/s (32K: 29.6 -> 34.9 with 6-bit attention, 32.5 without); base M4 16 GB
+23.5 -> 25.9 tok/s (32K: 18.8 -> 20.3). 12/12 on both.
+- The decode loop queues the next step before waiting for the current token. It used to wait first, leaving the
+  GPU idle while Python built the next graph (~2.8 ms per token on an M4 Pro): 35.9 -> 39.4 tok/s.
+- Compiled decode step (`engine/families/inkling2/fastpath.py`): fixed-shape caches (a ring for the window
+  visits, in-place 8-bit writes for the global ones, a fixed split-K grid per context band) so one `mx.compile`
+  graph serves every token. `--no-compiled-decode` turns it off.
+- Fused loop-controller mixing (two Metal kernels instead of ~12 ops, 48 times a token) and window attention as a
+  split-K kernel over the ring.
+- `--attn-bits 6` (opt-in) requantizes the attention projections: +3.9% (43.7 tok/s on the M4 Pro), mean KL 0.0057
+  against 8-bit where re-rounding alone gives 0.0045. Off by default.
+- Debug switches: `NUEMAC_NO_FUSED_MIX=1`, `NUEMAC_NO_RING_KERNEL=1`.
+
 ## 0.3.2 - 2026-11-21
 
 - Fix: multi-step tool use. OpenAI clients send an assistant tool call's arguments back as a JSON string; Inkling's

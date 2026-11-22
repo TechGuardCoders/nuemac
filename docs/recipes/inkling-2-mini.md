@@ -8,7 +8,7 @@ three changes land inside the noise.
 
 | at 96K context, same bench | **Nuemac** | llama.cpp b12600 (AtomicChat AD-IQ3_XXS) |
 | --- | --- | --- |
-| decode, short prompt | **23.5 tok/s** | 17.25 tok/s |
+| decode, short prompt | **25.9 tok/s** (0.4.0; 23.5 on 0.3.0) | 17.25 tok/s |
 | prefill, 4K / 16K prompt | **186 / 173 tok/s** | 68 / 61 tok/s |
 | 32K prompt: first token / decode | **202 s / 18.8 tok/s** | 690 s / 12.2 tok/s |
 | 94K prompt: first token / decode | **11.8 min / 13.7 tok/s** | 42.6 min / 11.2 tok/s |
@@ -293,12 +293,50 @@ one session with the same bench (2026-11-21):
 - **oQ3e wins on every row.** It is smaller, so it decodes faster, and it leaves room for twice the context.
   The 12 questions and two needles did not separate the two quants; a larger quality set might.
 - **Against the 16 GB build:** 1.5x decode (35.6 vs 23.5), 1.7x prefill, and 2.7x the context.
-- **The engine's fixed cost shows more on a faster GPU.** Stock oMLX (MTP off, 16K window, the same weights)
-  decoded at 39.9 tok/s, about 11% faster than Nuemac at short context; on the base M4 the gap is ~5%. Each
-  token costs the same few milliseconds of cache bookkeeping whatever the chip, so it is a larger share at
-  28 ms per token than at 43. Stock oMLX's full-history cache (~192 KB per token) would fit only ~45K tokens on 24 GB, by
-  that arithmetic. Trimming the overhead is the next engine lead.
+- **Stock oMLX was faster at short context** (39.9 tok/s, MTP off, 16K window) until 0.4.0; most of that gap was
+  the server's decode loop, see [Per-token overhead](#per-token-overhead-040). Stock oMLX's full-history cache
+  (~192 KB per token) would fit only ~45K tokens on 24 GB.
 - The drafter does not pay on this chip either; see [Speculative decoding](#speculative-decoding-the-drafter).
+
+## Per-token overhead (0.4.0)
+
+At 0.3.2 an M4 Pro token took ~28 ms while its weights need ~12 ms to read at full bandwidth (3.16 GB: experts
+1.34, attention projections 1.33, head 0.38, the rest 0.11). Where the other ~16 ms went, measured on the M4 Pro:
+
+- **One token is a graph of 9,808 MLX nodes**: about half are free views, the rest ~3,600 GPU launches (1,180
+  dtype casts, ~900 small fused element-wise kernels, 397 RMSNorms, 300 concatenates, 240 sums, 208 cache writes)
+  and only ~420 matmuls. A dependent small op costs 4-5 us alone, but inside a pipelined token it costs ~1 us:
+  removing ~400 of them saved ~0.3 ms.
+- **The decode loop left the GPU idle.** It waited for each token before building the next step's graph, so the
+  GPU sat idle for the ~2.8 ms Python takes to build it. Queueing the next step first (as mlx-lm does): server
+  decode 35.9 -> 39.4 tok/s. This was most of the gap to stock oMLX.
+- **A compiled decode step** (`engine/families/inkling2/fastpath.py`): fixed-shape caches let one `mx.compile`
+  graph serve every token. The 40 window visits keep a 1,024-slot ring (slot = position mod window, bias looked
+  up by distance); the 8 global visits write their 8-bit codes with a dynamic `slice_update`, updated in place,
+  and the split-K kernel reads the key count from an array over a fixed grid per context band. Same greedy tokens
+  as eager decoding, and a handoff between them mid-reply is exact. +1.8%.
+- **Fused loop-controller mixing** (`mixkernel.py`): the mixing that feeds each looped pass its messages was ~12
+  ops per call, 48 calls per token (2.8 ms). Two Metal kernels, with the reference's bf16 roundings: same greedy
+  tokens, +4%.
+- **Window attention as a split-K kernel** over the ring: same tokens, +0.5-1%.
+
+| server decode, M4 Pro 24 GB, alternating A/B | tok/s |
+| --- | --- |
+| 0.3.2 | 35.9 |
+| + queue the next step first | 39.4 |
+| + compiled decode step | 40.1 |
+| + fused mixing and ring-attention kernels | **42.1** |
+| + 6-bit attention projections (`--attn-bits 6`, opt-in) | 43.7 |
+
+Tried and not shipped:
+- **A fused 3-bit expert kernel** (both expert projections, the SwiGLU and the routing sum in two kernels). Exact,
+  but 181 us per visit against MLX's 156 us: MLX's `gather_qmm` already reads these 3-bit experts at 174-209 GB/s,
+  and its loads pre-scale the inputs so codes dequantize without shifts. A faster one is a bigger project worth
+  ~2 ms per token at best.
+- **6-bit attention projections by default.** Over 2,048 teacher-forced tokens (this recipe's prose and the
+  server's code), against stock 8-bit: re-rounding the 8-bit weights alone gives mean KL 0.0045 and 97.6% top-1
+  agreement (a looped model amplifies small weight changes); 6-bit gives 0.0057 and 97.1%; 5-bit 0.0101 and 95.8%.
+  6-bit still answers 12/12 and finds the 32K needle, but it is a quality trade, so it stays a flag.
 
 ## Ideas not tried
 
@@ -309,6 +347,7 @@ one session with the same bench (2026-11-21):
   quality cost.
 - Operator fusion for the `inkling2_loop` graph in llama.cpp, the real fix for its per-operation overhead
   (upstream work).
-- More GPU: done, see [24 GB M4 Pro](#24-gb-m4-pro-256k-context) (35.6 tok/s with the oQ3e build).
+- More GPU: done, see [24 GB M4 Pro](#24-gb-m4-pro-256k-context).
+- A faster 3-bit expert kernel than MLX's (see [Per-token overhead](#per-token-overhead-040)).
 - Engines checked and not usable here today: TensorFold 1.3.2 runs Inkling 2 Small on CUDA only; sushi 1.7
   serves four other model families.

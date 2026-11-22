@@ -35,9 +35,9 @@ runs it on a base 16 GB Mac mini with a 96K-token context, and 10-13% of memory 
 | on a 16 GB M4 Mac mini | stock MLX port (oMLX) | llama.cpp | **Nuemac** |
 | --- | --- | --- | --- |
 | longest context that fits | ~7K tokens | 96K | **96K** |
-| decode, short prompt | 24.8 tok/s | 17.3 tok/s | **23.5 tok/s** |
-| prompt reading | ~188 tok/s | 68 tok/s | **186 tok/s** |
-| a 94K-token prompt: first word after | doesn't fit | 42.6 min | **11.8 min** |
+| decode, short prompt | 24.8 tok/s | 17.3 tok/s | **25.9 tok/s** |
+| prompt reading | ~188 tok/s | 68 tok/s | **191 tok/s** |
+| a 94K-token prompt: first word after | doesn't fit | 42.6 min | **11.8 min** (0.3.0) |
 
 **Built around the model's own shape.** Inkling runs its middle layers three times per token: 48 attention passes,
 and 40 of them only ever look back 1,024 tokens. Nuemac keeps full history only for the 8 passes that read it, and
@@ -66,8 +66,8 @@ telemetry and no per-token bill.
 
 | Model | Machine checked | Speed | Recipe |
 | --- | --- | --- | --- |
-| **Inkling 2 Mini** (Thinking Machines), MLX oQ2.5e, 96K context: `inkling-2-mini` | Mac mini M4, 16 GB | **23.5 tok/s** decode, 186 tok/s prefill, 18.8 tok/s at 32K | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
-| **Inkling 2 Mini**, MLX oQ3e, 256K context: `inkling-2-mini-oq3e` | Mac mini M4 Pro, 24 GB | **35.6 tok/s** decode, 319 tok/s prefill, 29.4 tok/s at 32K, 21.4 at 120K | [inkling-2-mini, 24 GB](docs/recipes/inkling-2-mini.md#24-gb-m4-pro-256k-context) |
+| **Inkling 2 Mini** (Thinking Machines), MLX oQ2.5e, 96K context: `inkling-2-mini` | Mac mini M4, 16 GB | **25.9 tok/s** decode, 191 tok/s prefill, 20.3 tok/s at 32K | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
+| **Inkling 2 Mini**, MLX oQ3e, 256K context: `inkling-2-mini-oq3e` | Mac mini M4 Pro, 24 GB | **42.1 tok/s** decode, 318 tok/s prefill, 32.5 tok/s at 32K | [inkling-2-mini, 24 GB](docs/recipes/inkling-2-mini.md#24-gb-m4-pro-256k-context) |
 
 The installer picks the build for your Mac's memory: the 16 GB build below 24 GB, the 256K build at 24 GB or more.
 
@@ -81,14 +81,15 @@ Same Mac, 96K context on every row, one model loaded, `nuemac bench --depth 3276
 
 | | **Nuemac** | llama.cpp b12600 | Ternary Bonsai 2 27B (PrismML llama.cpp) |
 | --- | --- | --- | --- |
-| decode, short prompt | **23.5 tok/s** | 17.3 tok/s | 10.9 tok/s |
-| prefill, 4K / 16K prompt | **186 / 173 tok/s** | 68 / 61 tok/s | 58 / 55 tok/s |
-| 32K prompt: first token | **202 s** | 690 s | 647 s |
-| 32K prompt: decode | **18.8 tok/s** | 12.2 tok/s | 8.7 tok/s |
+| decode, short prompt | **25.9 tok/s** | 17.3 tok/s | 10.9 tok/s |
+| prefill, 4K / 16K prompt | **191 / 183 tok/s** | 68 / 61 tok/s | 58 / 55 tok/s |
+| 32K prompt: first token | **197 s** | 690 s | 647 s |
+| 32K prompt: decode | **20.3 tok/s** | 12.2 tok/s | 8.7 tok/s |
 | fact planted at 32K | found | found | found |
 | 12 known-answer questions | 12/12 | 12/12 | 11/12 |
 
-At a nearly full window (a 94K-token prompt) Nuemac answers after 11.8 minutes and decodes at 13.7 tok/s;
+Nuemac column: 0.4.0. At a nearly full window (a 94K-token prompt, measured on 0.3.0) Nuemac answers after 11.8
+minutes and decodes at 13.7 tok/s;
 llama.cpp takes 42.6 minutes and decodes at 11.2. Raw results: [`results/`](results/). The llama.cpp and Bonsai setups install from
 [inkling2-mini-mac-recipe](https://github.com/TechGuardCoders/inkling2-mini-mac-recipe), where this project
 started.
