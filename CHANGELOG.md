@@ -2,6 +2,23 @@
 
 Speeds are from `nuemac bench`: a base Mac mini M4 (10-core GPU, 16 GB) at 96K context unless a line says otherwise.
 
+## 0.6.0 - 2026-11-22: copy drafting, oMLX 0.8.3
+
+- Copy drafting: while one request decodes alone, a reply that repeats its context (a rewritten file, an edit,
+  quoted code) is drafted from that context and checked up to 16 tokens per forward pass. M4 Pro 24 GB (oQ3e),
+  rewriting a 240-line file: 40.8 -> 66.3 tok/s on oMLX 0.8.2 (69.5 at temperature 1), 42.1 -> 69.1 on 0.8.3
+  (72.5); ~14 tokens accepted per check. Prose is unchanged, code within 1.5%. Quality check 12/12; 2 and 4
+  requests at once unchanged. `--draft off` turns it off.
+  - Drafts come only from long exact runs (12 tokens), the lookup never waits on the GPU, and temperature
+    sampling stays exact (each drafted token is kept only if it equals the token the request's sampler draws).
+  - A check's rows read the 8-bit global cache directly (`q8_rows_attention`), checked against oMLX's reference
+    attention (1.2% relative, bf16 rounding).
+  - As with batching, greedy text after a drafted stretch may differ from 0.5.0's (different rounding).
+  - Response `timings` gain `draft_checks`, `draft_n`, `draft_accepted`.
+- oMLX 0.8.3 support (0.8.2 still works): 0.8.3 maps cache entries to layer visits itself, and Nuemac now hands
+  its per-visit caches through. On 0.8.3 Nuemac decodes ~2.5% faster (M4 Pro 43.8 tok/s) and reads prompts ~12%
+  faster. Homebrew still installs 0.8.2.
+
 ## 0.5.0 - 2026-11-22: continuous batching
 
 Several requests run at once: they join and leave one decode batch between steps (vLLM-style iteration-level

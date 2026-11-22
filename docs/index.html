@@ -147,6 +147,7 @@ footer img{height:16px;opacity:.8}
         </div>
         <div class="sub" style="margin-top:18px">On a 24 GB Mac mini M4 Pro: <b>42.3 tok/s</b> with a <b>256K</b> context. The installer picks the build for your Mac's memory.</div>
         <div class="sub" style="margin-top:8px">Up to 4 requests at once: <b>36.3 tok/s</b> total on the 16 GB mini, <b>60.4 tok/s</b> on the M4 Pro. <a href="#concurrency">How</a></div>
+        <div class="sub" style="margin-top:8px">Rewriting a file: <b>66-72 tok/s</b> on the M4 Pro, drafted from the file itself (0.6.0).</div>
       </div>
     </div>
   </div>
@@ -214,6 +215,7 @@ footer img{height:16px;opacity:.8}
         </tbody>
       </table>
     </div>
+    <p class="note">One request alone also drafts from its context (0.6.0): when a reply repeats something already in the conversation, such as a file being rewritten or edited, the next tokens are read off the earlier copy and checked up to 16 at a time. A 240-line file rewrite on the M4 Pro goes from 40.8 to 66-72 tok/s; prose is unchanged. Details: <a href="https://github.com/TechGuardCoders/nuemac/blob/main/docs/recipes/inkling-2-mini.md#copy-drafting-060">recipe</a>.</p>
     <p class="note">Why 4 requests give ~1.4&times; and not 4&times;: each one picks its own 8 of 128 experts per layer pass, so 4 together read ~3.7&times; the expert weights of one. Attention is only ~14% of a step; batching it into one kernel launch (adapted from <a href="https://github.com/ddalcu/mlx-serve">mlx-serve</a>, MIT) cut the step 4.5%. Rows in a batch round slightly differently than alone, so greedy text can drift from a solo run, as in other batching servers. Raw numbers: <a href="https://github.com/TechGuardCoders/nuemac/blob/main/results/2026-11-22-nuemac-0.5.0-concurrency.json">results/</a>.</p>
   </div>
 </section>

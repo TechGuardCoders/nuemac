@@ -93,7 +93,7 @@ if [ ! -f "$DEST/.verified" ] && [ "$REUSE" = 0 ]; then
 fi
 PLAN="$MODEL_LABEL [$(gib "$MODEL_BYTES")]"
 [ "$REUSE" = 1 ] && PLAN="$PLAN, reusing the files from ~/.mini-llm"
-if ! omlx_python >/dev/null; then NEED=$(( NEED + 2000 )); PLAN="$PLAN + oMLX $OMLX_VERSION from Homebrew [~2 GB]"; fi
+if ! omlx_python >/dev/null; then NEED=$(( NEED + 2000 )); PLAN="$PLAN + oMLX from Homebrew [~2 GB]"; fi
 mkdir -p "$PREFIX" 2>/dev/null || true
 FREE_MB=$(( $(df -k "$PREFIX" | awk 'NR==2{print $4}') / 1024 ))
 echo "Install to $PREFIX  (free disk $((FREE_MB / 1024)) GB, download ~$((NEED / 1000)) GB)"
@@ -137,7 +137,7 @@ if ! omlx_python >/dev/null; then
 fi
 PY="$(omlx_python)" || die "oMLX installed but its Python was not found"
 HAVE="$("$PY" -I -c 'import importlib.metadata as m; print(m.version("omlx"))' 2>/dev/null || echo unknown)"
-if [ "$HAVE" = "$OMLX_VERSION" ]; then echo "  oMLX $HAVE"
+if case " $OMLX_VERSION " in *" $HAVE "*) true;; *) false;; esac; then echo "  oMLX $HAVE"
 else echo "  oMLX $HAVE installed; $MODEL was tested with $OMLX_VERSION (Nuemac checks itself at start-up)"; fi
 echo "  nuemac $(grep -m1 '^__version__' "$PREFIX/nuemac/engine/server.py" | cut -d'"' -f2)"
 

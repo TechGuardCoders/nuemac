@@ -28,7 +28,7 @@ from mlx_lm.sample_utils import make_sampler  # noqa: E402
 
 from families import ContextFull, for_model  # noqa: E402
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 log = logging.getLogger("nuemac")
 
 BANDS = (4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288)
@@ -62,9 +62,89 @@ class Request:
         self.max_len = 0
         self.t1 = 0.0
         self.t_prompt = 0.0
+        self.drafter = None              # CopyDrafter while this request decodes alone
 
     def cancel(self):
         self.cancelled = True
+
+
+class CopyDrafter:
+    """Drafts from the context: when the reply is repeating an earlier stretch of the prompt or reply (a rewritten
+    file, an edit, quoted code), propose the tokens that followed that stretch. The lookup uses only tokens already
+    known, so a step that finds nothing costs no GPU sync; a draft is checked in one forward pass.
+    - Candidates: up to CANDS earlier positions of the last NGRAM tokens; the one with the longest run of equal tokens
+      before it wins, and drafting needs at least MIN_RUN equal tokens (verbatim copying, not a common phrase).
+    - The pending next token is checked along with the draft (the draft starts with the token after it)."""
+
+    NGRAM = 4
+    CANDS = 8
+    MIN_RUN = 12              # equal tokens before the match point needed to draft (8 cost code 5%: common lines)
+    MIN, START, MAX = 3, 4, 15
+    COOLDOWN = 8              # normal tokens after a draft whose first token missed
+    SCAN = 64                 # how far back a candidate's run is compared
+
+    def __init__(self):
+        self.seq = []
+        self.index = {}       # n-gram -> recent positions just past it, newest last
+        self.k = self.START
+        self.wait = 0
+        self.stats = [0, 0, 0]   # checks, drafted, accepted
+        self.secs = [0.0, 0.0, 0.0, 0]   # switch out of the compiled decoder, check pass, re-run, re-runs
+
+    def extend(self, toks):
+        n, seq, idx = self.NGRAM, self.seq, self.index
+        for t in toks:
+            seq.append(t)
+            if len(seq) > n:
+                key = tuple(seq[-n - 1:-1])
+                lst = idx.get(key)
+                if lst is None:
+                    idx[key] = [len(seq) - 1]
+                else:
+                    lst.append(len(seq) - 1)
+                    if len(lst) > self.CANDS:
+                        del lst[0]
+
+    def _run(self, p):
+        """Equal tokens immediately before position p and before the end of seq."""
+        seq, n, i = self.seq, len(self.seq), 0
+        while i < self.SCAN and p - 1 - i >= 0 and seq[p - 1 - i] == seq[n - 1 - i] and p - 1 - i < n - 1 - i:
+            i += 1
+        return i
+
+    def propose(self, limit):
+        """Draft for the tokens after the pending one: [guess of the pending token's successor, ...]."""
+        if self.wait > 0:
+            self.wait -= 1
+            return []
+        if len(self.seq) < self.MIN_RUN:
+            return []
+        cands = self.index.get(tuple(self.seq[-self.NGRAM:]))
+        if not cands:
+            return []
+        best, run = None, 0
+        for p in cands:
+            if p >= len(self.seq):
+                continue
+            r = self._run(p)
+            if r > run:
+                best, run = p, r
+        if best is None or run < self.MIN_RUN:
+            return []
+        k = min(self.k, limit)
+        d = self.seq[best + 1:best + 1 + k]      # seq[best] is the guess for the pending token, checked as is
+        return d if len(d) >= 2 else []
+
+    def update(self, drafted, accepted):
+        self.stats[0] += 1
+        self.stats[1] += drafted
+        self.stats[2] += accepted
+        if accepted == drafted:
+            self.k = min(self.MAX, self.k * 2 + 1)
+        else:
+            self.k = max(self.MIN, accepted + 2)
+            if accepted == 0:
+                self.wait = self.COOLDOWN
 
 
 class Engine:
@@ -96,6 +176,7 @@ class Engine:
         if not hasattr(self.family, "batch_cache"):
             self.slots = 1
         self.keep = max(0, int(options.get("keep_caches", 2)))
+        self.draft = options.get("draft", "copy") == "copy" and not os.environ.get("NUEMAC_NO_DRAFT")
         weights = mx.get_active_memory()
         self.budget = self.limit - weights - int(float(options.get("reserve_gb", 1.5)) * 2**30)
         self.stop_ids = self.family.stop_ids(self.tok)
@@ -220,8 +301,60 @@ class Engine:
             self.decoder.begin(req.cache)
             self.dec_seq = req
 
+    def _draft_step(self, r):
+        """One copy-draft cycle for r, decoding alone. Returns False when there was nothing to draft."""
+        if r.drafter is None:
+            r.drafter = CopyDrafter()
+        dr = r.drafter
+        dr.extend(r.tokens[len(dr.seq):])       # catch up with tokens decoded normally since the last check
+        # room: the reply's token budget and the cache (prompt + max_tokens keys)
+        limit = min(r.max_tokens - len(r.out) - 3, r.max_len - len(r.tokens) - 3, CopyDrafter.MAX)
+        d = dr.propose(limit) if limit >= 2 else []   # known tokens only: no wait on the pending token r.y
+        if not d:
+            return False
+        t0 = time.perf_counter()
+        self._use_decoder(None)
+        snap = self.family.snapshot(r.cache)
+        t1 = time.perf_counter()
+        x = mx.concatenate([r.y.reshape(1).astype(mx.int32), mx.array(d, dtype=mx.int32)])[None]
+        logits = self.model(x, cache=r.cache)[0]          # [K + 1, vocab]
+        s = r.sampler(logits)
+        mx.eval(s)
+        s = s.tolist()
+        tok0 = r.y.item()
+        t2 = time.perf_counter()
+        dr.secs[0] += t1 - t0
+        dr.secs[1] += t2 - t1
+        j = 0
+        while j < len(d) and d[j] == s[j]:
+            j += 1
+        dr.update(len(d), j)
+        if j < len(d):                          # roll the cache back to tok0 + the accepted drafts
+            self.family.restore(r.cache, snap)
+            mx.eval(self.model.model(mx.array([tok0] + d[:j], dtype=mx.int32)[None], r.cache))
+            dr.secs[2] += time.perf_counter() - t2
+            dr.secs[3] += 1
+        emitted = [tok0] + d[:j]
+        r.tokens.extend(emitted)                # the cache holds all of them, even past a stop token
+        r.y = mx.array([s[j]], dtype=mx.int32)
+        for tok in emitted:
+            r.out.append(tok)
+            stop = (tok in self.stop_ids and not r.ignore_eos) or r.cancelled
+            if not stop and r.on_token is not None and r.on_token(tok) is False:
+                stop = True
+            if stop:
+                self.decoding.remove(r)
+                self._finish(r, "stop")
+                return True
+        return True
+
     def _decode_step(self):
         t = time.time()
+        if (self.draft and len(self.decoding) == 1 and not self.prefilling and not self.waiting
+                and len(self.decoding[0].out) + 3 < self.decoding[0].max_tokens):
+            if self._draft_step(self.decoding[0]):
+                self.decode_credit -= time.time() - t
+                return
         # a sequence about to emit its last allowed token is not stepped (its cache has no room past it)
         last = [r for r in self.decoding if len(r.out) + 1 >= r.max_tokens]
         step = [r for r in self.decoding if r not in last]
@@ -265,9 +398,17 @@ class Engine:
         return {"prompt_n": len(req.ids) - req.reused, "cache_n": req.reused, "prompt_ms": req.t_prompt * 1000,
                 "prompt_per_second": (len(req.ids) - req.reused) / req.t_prompt if req.t_prompt > 0 else 0.0,
                 "predicted_n": n, "predicted_ms": t_gen * 1000,
-                "predicted_per_second": (n - 1) / t_gen if n > 1 and t_gen > 0 else 0.0, "finish": finish}
+                "predicted_per_second": (n - 1) / t_gen if n > 1 and t_gen > 0 else 0.0, "finish": finish,
+                "draft_checks": req.drafter.stats[0] if req.drafter else 0,
+                "draft_n": req.drafter.stats[1] if req.drafter else 0,
+                "draft_accepted": req.drafter.stats[2] if req.drafter else 0}
 
     def _finish(self, req, finish):
+        if req.drafter is not None and req.drafter.stats[0]:
+            st, sc = req.drafter.stats, req.drafter.secs
+            log.info("copy drafts: %d checks, %d drafted, %d accepted; switch %.2f s, checks %.2f s, re-runs %d %.2f s,"
+                     " %d tokens in %.2f s", st[0], st[1], st[2], sc[0], sc[1], sc[3], sc[2], len(req.out),
+                     time.time() - req.t1)
         if self.dec_seq is req:
             self._use_decoder(None)
         req.on_token = None
@@ -397,7 +538,7 @@ class EngineThread(threading.Thread):
 def timings(stats):
     return {k: stats[k] for k in ("prompt_n", "prompt_ms", "prompt_per_second",
                                   "predicted_n", "predicted_ms", "predicted_per_second",
-                                  "cache_n")}
+                                  "cache_n", "draft_checks", "draft_n", "draft_accepted")}
 
 
 def canonical_messages(msgs):
@@ -622,6 +763,8 @@ def main():
                     help="most sequences decoding at once (continuous batching); 1 = one request at a time")
     ap.add_argument("--keep-caches", type=int, default=2,
                     help="finished conversations whose caches stay for prompt reuse (memory permitting)")
+    ap.add_argument("--draft", default="copy", choices=("copy", "off"),
+                    help="copy: draft tokens from the context while one request decodes alone (rewrites, edits)")
     ap.add_argument("--no-compiled-decode", action="store_true",
                     help="decode eagerly (one MLX graph built per token) instead of the compiled decode step")
     ap.add_argument("--attn-bits", type=int, default=8, choices=(4, 5, 6, 8),
@@ -634,7 +777,7 @@ def main():
     MODEL_ID = a.alias
     WORKER = EngineThread(a.model, a.ctx, a.prefill_chunk,
                           {"expect_omlx": a.expect_omlx, "head_bits": a.head_bits, "attn_bits": a.attn_bits,
-                           "compiled_decode": not a.no_compiled_decode, "slots": a.slots,
+                           "compiled_decode": not a.no_compiled_decode, "slots": a.slots, "draft": a.draft,
                            "keep_caches": a.keep_caches})
     WORKER.start()
     WORKER.ready.wait()

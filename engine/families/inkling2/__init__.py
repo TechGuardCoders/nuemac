@@ -23,7 +23,7 @@ log = logging.getLogger("nuemac.inkling2")
 
 NAME = "inkling2"
 MODEL_TYPES = frozenset({"inkling2_loop", "inkling2"})
-TESTED_OMLX = "0.8.2"
+TESTED_OMLX = ("0.8.2", "0.8.3")
 
 # Below this many cached keys the plain MLX-ops path decodes faster end to end:
 # the custom kernel's own time is lower at every depth, but on a base M4 it cost
@@ -166,6 +166,43 @@ def q8_decode_attention(q, kc, vc, rel, sink, scale, group, bits):
     return out.reshape(B, hq, L, D)
 
 
+ATTEND_SIGS = (["self", "q", "k", "v", "rel", "sink", "kv"],              # oMLX 0.8.2
+               ["self", "q", "k", "v", "rel", "sink", "kv", "state"])     # 0.8.3: a window visit's state may hold its K/V
+
+
+VERIFY_MAX_ROWS = 16
+
+
+def q8_rows_attention(q, kv, rel, sink, scale):
+    """L new rows (already appended) over the 8-bit global cache, causal: row i sits at position P + i, sees keys
+    up to it, with the relative bias for distances below R. q: [1, hq, L, D]; rel: [1, L, hq, R]; sink: [1, L, hq].
+    Same math as q8_decode_attention, one row at a time, for draft checks."""
+    (kq, ks, kb), (vq, vs, vb) = kv.codes()
+    B, hq, L, D = q.shape
+    hkv, s = kq.shape[1], kq.shape[2]
+    rep, R = hq // hkv, rel.shape[-1]
+    P = s - L
+    qg = (q * scale).reshape(B, hkv, rep, L, D)
+    kc = tuple(mx.expand_dims(x, -3) for x in (kq, ks, kb))
+    vc = tuple(mx.expand_dims(x, -3) for x in (vq, vs, vb))
+    scores = mx.quantized_matmul(qg, *kc, transpose=True, group_size=kv.group, bits=kv.bits).astype(mx.float32)
+    T = min(s, R + L)                                           # the keys any row's bias or mask touches
+    d = (P + mx.arange(L))[:, None] - (s - T + mx.arange(T))[None, :]          # [L, T] distance row -> key
+    rel_t = rel[0].transpose(1, 0, 2).astype(mx.float32)                       # [hq, L, R]
+    idx = mx.broadcast_to(mx.clip(d, 0, R - 1)[None], (hq, L, T))
+    bias = mx.take_along_axis(rel_t, idx, axis=2)
+    bias = mx.where((d < R)[None], bias, 0.0)
+    bias = mx.where((d < 0)[None], -mx.inf, bias).reshape(B, hkv, rep, L, T)
+    if T < s:
+        scores = mx.concatenate([scores[..., : s - T], scores[..., s - T:] + bias], axis=-1)
+    else:
+        scores = scores + bias
+    sk = sink[0].transpose(1, 0).astype(mx.float32).reshape(B, hkv, rep, L, 1)   # [hq, L] per row
+    p = mx.softmax(mx.concatenate([scores, sk], axis=-1), axis=-1, precise=True)
+    out = mx.quantized_matmul(p[..., :s].astype(q.dtype), *vc, transpose=False, group_size=kv.group, bits=kv.bits)
+    return out.reshape(B, hq, L, D)
+
+
 def check_omlx(expect):
     """The family leans on oMLX internals: fail early and clearly if they moved."""
     import importlib.metadata as md
@@ -175,11 +212,12 @@ def check_omlx(expect):
     from omlx.patches.inkling2 import model as ink
 
     sig = list(inspect.signature(ink.Inkling2Attention.attend).parameters)
-    if sig != ["self", "q", "k", "v", "rel", "sink", "kv"] or not hasattr(ink, "kernels"):
+    if sig not in ATTEND_SIGS or not hasattr(ink, "kernels"):
         raise SystemExit(f"oMLX {have}: Inkling2Attention.attend changed ({sig}); "
-                         f"this Nuemac family was written for oMLX {expect or '0.8.2'}")
-    if expect and have != expect:
-        log.warning("oMLX %s installed; Nuemac was tested with %s", have, expect)
+                         f"this Nuemac family was written for oMLX {' / '.join(TESTED_OMLX)}")
+    tested = tuple(expect.replace(",", " ").split()) if isinstance(expect, str) else tuple(expect or ())
+    if tested and have not in tested:
+        log.warning("oMLX %s installed; Nuemac was tested with %s", have, " / ".join(tested))
     return have
 
 
@@ -189,7 +227,7 @@ def install_attend_patch():
 
     orig = ink.Inkling2Attention.attend
 
-    def attend(self, q, k, v, rel, sink, kv):
+    def attend(self, q, k, v, rel, sink, kv, state=None):
         if hasattr(kv, "decode_attend"):   # compiled decode (fastpath.py)
             return kv.decode_attend(self, q, k, v, rel, sink)
         if isinstance(kv, Q8GlobalKVCache) and q.shape[0] == 1 and q.shape[2] == 1:
@@ -198,9 +236,29 @@ def install_attend_patch():
                 return q8_flash_decode(q, kv, rel, sink, self.scale)
             kc, vc = kv.codes()
             return q8_decode_attention(q, kc, vc, rel, sink, self.scale, kv.group, kv.bits)
-        return orig(self, q, k, v, rel, sink, kv)
+        if isinstance(kv, Q8GlobalKVCache) and q.shape[0] == 1 and q.shape[2] <= VERIFY_MAX_ROWS:
+            # a few rows (a draft being checked): read the 8-bit codes, no bf16 copy of the whole history
+            kv.append(k, v)
+            return q8_rows_attention(q, kv, rel, sink, self.scale)
+        return orig(self, q, k, v, rel, sink, kv)   # kv is never None here, so 0.8.3's `state` is unused
 
     ink.Inkling2Attention.attend = attend
+    if hasattr(ink.Inkling2TextModel, "visit_caches"):
+        install_visit_caches_patch(ink)
+
+
+def install_visit_caches_patch(ink):
+    """oMLX 0.8.3 lays a cache list out as one entry per window visit and two per global visit, and maps them to
+    visits in visit_caches. Nuemac's caches stay one [KV, conv state] pair per visit (make_cache, batch_cache,
+    the compiled decoder): hand those through as they are."""
+    orig = ink.Inkling2TextModel.visit_caches
+
+    def visit_caches(self, cache):
+        if len(cache) == self.num_visits and all(isinstance(c, (list, tuple, CacheList)) for c in cache):
+            return [(c[0], c[1]) for c in cache]
+        return orig(self, cache)
+
+    ink.Inkling2TextModel.visit_caches = visit_caches
 
 
 def install_bf16_loop_patch():

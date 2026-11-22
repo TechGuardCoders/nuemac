@@ -81,7 +81,7 @@ telemetry and no per-token bill.
 | Model | Machine checked | Speed | Recipe |
 | --- | --- | --- | --- |
 | **Inkling 2 Mini** (Thinking Machines), MLX oQ2.5e, 96K context: `inkling-2-mini` | Mac mini M4, 16 GB | **25.9 tok/s** decode, 191 tok/s prefill, 20.7 tok/s at 32K; 36.3 tok/s total at 4 requests | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
-| **Inkling 2 Mini**, MLX oQ3e, 256K context: `inkling-2-mini-oq3e` | Mac mini M4 Pro, 24 GB | **42.3 tok/s** decode, 318 tok/s prefill, 33.8 tok/s at 32K; 60.4 tok/s total at 4 requests | [inkling-2-mini, 24 GB](docs/recipes/inkling-2-mini.md#24-gb-m4-pro-256k-context) |
+| **Inkling 2 Mini**, MLX oQ3e, 256K context: `inkling-2-mini-oq3e` | Mac mini M4 Pro, 24 GB | **42.3 tok/s** decode, 318 tok/s prefill, 33.8 tok/s at 32K; 60.4 tok/s total at 4 requests; 66-72 tok/s rewriting a file | [inkling-2-mini, 24 GB](docs/recipes/inkling-2-mini.md#24-gb-m4-pro-256k-context) |
 
 The installer picks the build for your Mac's memory: the 16 GB build below 24 GB, the 256K build at 24 GB or more.
 
@@ -119,6 +119,9 @@ What Nuemac does for this model (details and every experiment in the [recipe](do
    at 6 bits (KL 0.0003 against 8-bit). Together: +5% decode.
 5. **Continuous batching** (0.5.0): up to 4 requests share each decode step, with every row's attention in one
    Metal launch over its own window and 8-bit caches. 4 at once: 36.3 tok/s total.
+6. **Copy drafting** (0.6.0): a reply that repeats its context (a rewritten file, an edit) is drafted from that
+   context and checked up to 16 tokens at a time: 40.8 -> 66-72 tok/s on a file rewrite on the M4 Pro, prose
+   unchanged. [Details](docs/recipes/inkling-2-mini.md#copy-drafting-060).
 
 ## Requirements
 
@@ -157,7 +160,8 @@ curl http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/jso
 Any OpenAI-compatible client works with base URL `http://127.0.0.1:8080/v1`; the API key can be anything. The
 server supports streaming, `reasoning_content`, tool calls and `reasoning_effort` (`low` / `medium` / `high`).
 It also speaks llama-server's `/completion` with `timings`. Up to 4 requests run at once (continuous batching,
-`--slots`), and each conversation's cache is kept, so a new turn only processes its new tokens.
+`--slots`), and each conversation's cache is kept, so a new turn only processes its new tokens. A reply that
+repeats its context, such as a rewritten file, is drafted from it (`--draft`, on by default).
 
 | command | what it does |
 | --- | --- |
@@ -185,7 +189,8 @@ results/                         raw benchmark JSON behind every number above
 Nuemac is a thin layer over other people's work. Full notices are in [NOTICE](NOTICE).
 
 - [Thinking Machines Lab](https://huggingface.co/thinkingmachines/Inkling-2-Mini) for Inkling 2 Mini.
-- [oMLX](https://github.com/jundot/omlx) for the MLX model code, chat handling and output parser.
+- [oMLX](https://github.com/jundot/omlx) for the MLX model code, chat handling and output parser, and (0.8.3,
+  [#5528](https://github.com/jundot/omlx/pull/5528)) the context-copy drafting that Nuemac's copy drafter follows.
   [MLX and mlx-lm](https://github.com/ml-explore) are by Apple.
 - [mlx-community](https://huggingface.co/mlx-community/Inkling-2-Mini-oQ2.5e-mtp) for the MLX weights.
 - [mlx-serve](https://github.com/ddalcu/mlx-serve) by David Dalcu: Nuemac's batched decode attention is adapted

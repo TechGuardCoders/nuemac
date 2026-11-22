@@ -1,0 +1,112 @@
+{
+  "engine": "nuemac 0.6.0",
+  "date": "2026-11-22",
+  "machine": "Mac mini M4 Pro 24 GB, inkling-2-mini-oq3e, ctx 262144",
+  "test": "o83bench: prose essay 600 tok, Python LRU-cache code 600 tok, rewrite of a 240-line Python file (rename one class) 3500 tok, reasoning_effort low, one request at a time",
+  "tok_s": {
+    "omlx_0.8.2": {
+      "off": {
+        "prose": [
+          42.77,
+          42.22
+        ],
+        "code": [
+          42.56,
+          42.11
+        ],
+        "rewrite": [
+          40.8,
+          40.7
+        ]
+      },
+      "copy": {
+        "prose": [
+          42.75,
+          42.3
+        ],
+        "code": [
+          41.93,
+          41.6
+        ],
+        "rewrite": [
+          66.33,
+          69.52
+        ]
+      }
+    },
+    "omlx_0.8.3": {
+      "off": {
+        "prose": [
+          43.82,
+          43.27
+        ],
+        "code": [
+          43.69,
+          43.36
+        ],
+        "rewrite": [
+          42.07,
+          41.93
+        ]
+      },
+      "copy": {
+        "prose": [
+          43.79,
+          43.4
+        ],
+        "code": [
+          43.09,
+          42.86
+        ],
+        "rewrite": [
+          69.06,
+          72.52
+        ]
+      }
+    }
+  },
+  "tok_s_note": "[temperature 0, temperature 1]",
+  "rewrite_drafts": {
+    "omlx_0.8.2": [
+      {
+        "checks": 202,
+        "drafted": 2864,
+        "accepted": 2801
+      },
+      {
+        "checks": 201,
+        "drafted": 2945,
+        "accepted": 2919
+      }
+    ],
+    "omlx_0.8.3": [
+      {
+        "checks": 194,
+        "drafted": 2780,
+        "accepted": 2740
+      },
+      {
+        "checks": 200,
+        "drafted": 2934,
+        "accepted": 2911
+      }
+    ]
+  },
+  "copy_on_0.8.2": {
+    "qa": "12/12",
+    "two_at_once_total_tok_s": 45.8,
+    "four_at_once_total_tok_s": 60.6
+  },
+  "stock_omlx_0.8.3_reference": {
+    "drafter_off": {
+      "prose": 42.0,
+      "code": 42.0,
+      "rewrite": 38.9
+    },
+    "lightning_mtp_on": {
+      "prose": 36.5,
+      "code": 46.3,
+      "rewrite": 56.9
+    }
+  }
+}

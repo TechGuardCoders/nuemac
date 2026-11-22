@@ -262,7 +262,8 @@ target alone in Nuemac (2K context) shows where:
   decode) took a 2-token verify from 53.3 to 50.1 ms.
 
 Even with that jump removed, depth 1 would gain ~15% on code and nothing on prose, because prose accepts too
-few drafts. So the recipe ships without a drafter. ~25 tok/s at short context is close to this chip's bandwidth ceiling
+few drafts. So Nuemac does not use the DSpark head. It drafts from the context instead, where a check accepts
+~14 tokens: see [copy drafting](#copy-drafting-060). ~25 tok/s at short context is close to this chip's bandwidth ceiling
 for these weights; 30 would take a lower-bit (lossier) quant or a faster chip.
 
 ## Long context
@@ -371,6 +372,45 @@ Greedy output is not batch-invariant: a row batched with others rounds different
 tokens can drift from the single-request text after a few hundred characters (the text stays coherent). Two
 identical prompts sent together need not come back identical. vLLM and other batching servers behave the same way
 by default. `--slots 1` restores one request at a time; `NUEMAC_NO_SLOTS_KERNEL=1` falls back to per-row attention.
+
+## Copy drafting (0.6.0)
+
+oMLX 0.8.3 showed what does pay on this chip: copying from the context. When a reply repeats something already in
+the prompt or the reply (a rewritten file, an edit, quoted code), the next tokens can be read off the earlier copy
+and checked in one forward pass. A 16-row check costs ~9 decode steps here (each row routes to its own experts),
+so it pays only when nearly all of a draft is right. Stock oMLX 0.8.3 with its drafter on the M4 Pro: a 240-line
+file rewrite 38.9 -> 56.9 tok/s, code 42.0 -> 46.3, but prose 42.0 -> 36.5, because its DSpark drafts are checked
+on every token.
+
+Nuemac drafts only copies, and only when the copy is certain enough to be worth a check:
+
+- The lookup uses tokens already known, so a step that finds nothing waits on nothing (the first version read
+  the pending token every step, which undid the queue-first decode loop and cost prose 13%).
+- Up to 8 earlier positions of the last 4 tokens are candidates; the one with the longest run of equal tokens
+  before it wins, and a draft needs a run of 12 (a run of 8 drafted common code lines and cost code 5%).
+- Drafts start at 4 tokens and double up to 15 while they keep matching. A miss on the first token pauses
+  drafting for 8 tokens.
+- The check feeds the pending token plus the draft. Each row's token is sampled with the request's own sampler,
+  and the draft is kept up to its first difference, so temperature sampling stays exact.
+- A partial match restores the cache snapshot and re-runs the kept tokens (the short-conv states can't be cut
+  back otherwise); full matches, the common case, need no re-run.
+- The 8 global visits read a check's few rows straight from the 8-bit cache (`q8_rows_attention`), instead of
+  dequantizing the whole history.
+- Only while one request is decoding: with several, each extra row costs every request.
+
+| M4 Pro 24 GB, oQ3e, tok/s | oMLX 0.8.2, off | **0.8.2, copy** | 0.8.3, off | **0.8.3, copy** |
+| --- | --- | --- | --- | --- |
+| prose, temperature 0 / 1 | 42.8 / 42.2 | 42.8 / 42.3 | 43.8 / 43.3 | 43.8 / 43.4 |
+| code, temperature 0 / 1 | 42.6 / 42.1 | 41.9 / 41.6 | 43.7 / 43.4 | 43.1 / 42.9 |
+| 240-line file rewrite, temperature 0 / 1 | 40.8 / 40.7 | **66.3 / 69.5** | 42.1 / 41.9 | **69.1 / 72.5** |
+
+On the rewrite, 2,801-2,919 of ~2,900 drafted tokens were accepted in ~200 checks (~14 per check). The quality
+check scores 12/12 with drafting on; 2 and 4 requests at once are unchanged (45.8 and 60.6 tok/s total). As with
+batching, a drafted stretch can round differently from one-token steps, so greedy text may differ from 0.5.0 after
+a draft. `--draft off` turns it off.
+
+Nuemac also runs on oMLX 0.8.3 now (0.8.3 maps cache entries to layer visits itself; Nuemac keeps its own
+per-visit caches). 0.8.3's smaller forward pass gives Nuemac ~2.5% more decode and ~12% faster prompt reading.
 
 ## Ideas not tried
 
