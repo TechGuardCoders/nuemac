@@ -12,6 +12,8 @@ to token:
 Prefill stays eager (Engine.generate). `Decoder.begin` moves the caches into this layout after the prompt and
 `Decoder.end` moves them back, so prompt reuse and snapshots work as before.
 """
+import os
+
 import mlx.core as mx
 from mlx_lm.models.cache import ArraysCache
 
@@ -29,8 +31,69 @@ def bucket_for(n):
     return len(BUCKETS) - 1
 
 
+# Window attention over the bf16 ring: split-K pass 1 (per key: distance d = (o - slot) mod W, skipped while
+# d > o, i.e. not written yet), then q8attn's pass 2 merges the partials and the sink. Replaces ~9 MLX ops.
+_RING_PASS1 = """
+    const uint lane = thread_index_in_simdgroup;
+    const uint sg = simdgroup_index_in_threadgroup;
+    const uint chunk = threadgroup_position_in_grid.x;
+    const uint h = threadgroup_position_in_grid.y;
+    const int o = params[0];
+    const float scale = fparams[0];
+    float qv[REP][4];
+    float m[REP], l[REP];
+    float acc[REP][4];
+    for (int r = 0; r < REP; r++) {
+        for (int k = 0; k < 4; k++) {
+            qv[r][k] = float(q[(h * REP + r) * 128 + lane * 4 + k]) * scale;
+            acc[r][k] = 0.0f;
+        }
+        m[r] = -1e30f;
+        l[r] = 0.0f;
+    }
+    const int per = CHUNK / SG;
+    const int start = (int)chunk * CHUNK + (int)sg * per;
+    for (int j = start; j < start + per; j++) {
+        const int d = (o - j + W) % W;
+        if (d > o) continue;                               // slot not written yet (uniform per simdgroup)
+        const size_t row = ((size_t)h * W + j) * 128 + lane * 4;
+        const float k0 = float(kr[row]), k1 = float(kr[row + 1]), k2 = float(kr[row + 2]), k3 = float(kr[row + 3]);
+        const float v0 = float(vr[row]), v1 = float(vr[row + 1]), v2 = float(vr[row + 2]), v3 = float(vr[row + 3]);
+        for (int r = 0; r < REP; r++) {
+            float s = simd_sum(qv[r][0] * k0 + qv[r][1] * k1 + qv[r][2] * k2 + qv[r][3] * k3);
+            s += float(rel[(h * REP + r) * RELN + d]);
+            if (s > m[r]) {
+                const float corr = fast::exp(m[r] - s);
+                l[r] *= corr;
+                acc[r][0] *= corr; acc[r][1] *= corr; acc[r][2] *= corr; acc[r][3] *= corr;
+                m[r] = s;
+            }
+            const float p = fast::exp(s - m[r]);
+            l[r] += p;
+            acc[r][0] += p * v0; acc[r][1] += p * v1; acc[r][2] += p * v2; acc[r][3] += p * v3;
+        }
+    }
+    const int P = params[2];
+    const size_t pidx = (size_t)chunk * SG + sg;
+    for (int r = 0; r < REP; r++) {
+        const size_t oi = ((size_t)h * (size_t)P + pidx) * REP + r;
+        if (lane == 0) { pm[oi] = m[r]; pl[oi] = l[r]; }
+        for (int k = 0; k < 4; k++) pacc[oi * 128 + lane * 4 + k] = acc[r][k];
+    }
+"""
+_ring_pass1 = mx.fast.metal_kernel(
+    name="inkling_ring_decode_pass1",
+    input_names=["q", "kr", "vr", "rel", "params", "fparams"],
+    output_names=["pm", "pl", "pacc"],
+    source=_RING_PASS1,
+)
+RING_CHUNK, RING_SG = 128, 4
+
+
 class RingKV:
     """A sliding-window visit during decode: `window` slots, slot = position % window."""
+
+    use_kernel = not os.environ.get("NUEMAC_NO_RING_KERNEL")   # debug switch: the SDPA path
 
     def __init__(self, k, v, offset):
         self.k, self.v, self.offset = k, v, offset
@@ -41,12 +104,39 @@ class RingKV:
         slot = (o % W).reshape(1)
         self.k = mx.slice_update(self.k, k, slot, axes=(2,))
         self.v = mx.slice_update(self.v, v, slot, axes=(2,))
+        if self.use_kernel and q.shape[-1] == D and W % RING_CHUNK == 0 and rel.shape[-1] == W:
+            return self._kernel(attn, q, rel, sink, W, o)
         d = (o - mx.arange(W, dtype=mx.int32) + W) % W            # distance of each slot's key
         bias = mx.take(rel[0, 0], d, axis=-1)                      # [hq, W]
         mask = mx.where((d <= o)[None, :], bias.astype(q.dtype), mx.array(-mx.inf, q.dtype))
         return mx.fast.scaled_dot_product_attention(
             q, self.k, self.v, scale=attn.scale, mask=mask.reshape(1, -1, 1, W),
             sinks=sink[0, 0].astype(q.dtype))
+
+    def _kernel(self, attn, q, rel, sink, W, o):
+        hq, hkv = q.shape[1], self.k.shape[1]
+        rep = hq // hkv
+        chunks = W // RING_CHUNK
+        P = chunks * RING_SG
+        params = mx.concatenate([o.reshape(1), mx.array([0, P], dtype=mx.int32)]).astype(mx.int32)
+        fparams = mx.array([attn.scale], dtype=mx.float32)
+        pm, pl, pacc = _ring_pass1(
+            inputs=[q.reshape(hq * D), self.k, self.v, rel[0, 0], params, fparams],
+            template=[("REP", rep), ("RELN", rel.shape[-1]), ("CHUNK", RING_CHUNK), ("SG", RING_SG), ("W", W)],
+            grid=(chunks * 32 * RING_SG, hkv, 1),
+            threadgroup=(32 * RING_SG, 1, 1),
+            output_shapes=[(hkv, P, rep), (hkv, P, rep), (hkv, P, rep, D)],
+            output_dtypes=[mx.float32, mx.float32, mx.float32],
+        )
+        (out,) = _pass2(
+            inputs=[pm, pl, pacc, sink[0, 0], params],
+            template=[("REP", rep)],
+            grid=(D, hq, 1),
+            threadgroup=(D, 1, 1),
+            output_shapes=[(hq * D,)],
+            output_dtypes=[mx.bfloat16],
+        )
+        return out.reshape(1, hq, 1, D).astype(q.dtype)
 
 
 class Q8DecodeKV:
