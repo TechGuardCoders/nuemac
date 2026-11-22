@@ -470,6 +470,8 @@ def main():
     ap.add_argument("--expect-omlx", default="", help="oMLX version the model's recipe was tested with")
     ap.add_argument("--no-compiled-decode", action="store_true",
                     help="decode eagerly (one MLX graph built per token) instead of the compiled decode step")
+    ap.add_argument("--attn-bits", type=int, default=8, choices=(4, 5, 6, 8),
+                    help="inkling2: requantize the 8-bit attention projections")
     ap.add_argument("--head-bits", type=int, default=6, choices=(4, 5, 6, 8),
                     help="inkling2: requantize the 8-bit output head (6: near-lossless, faster)")
     a = ap.parse_args()
@@ -477,7 +479,7 @@ def main():
     global WORKER
     MODEL_ID = a.alias
     WORKER = EngineThread(a.model, a.ctx, a.prefill_chunk,
-                          {"expect_omlx": a.expect_omlx, "head_bits": a.head_bits,
+                          {"expect_omlx": a.expect_omlx, "head_bits": a.head_bits, "attn_bits": a.attn_bits,
                            "compiled_decode": not a.no_compiled_decode})
     WORKER.start()
     WORKER.ready.wait()

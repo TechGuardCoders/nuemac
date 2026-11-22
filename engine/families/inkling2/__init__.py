@@ -12,6 +12,7 @@ Runs on oMLX's Inkling 2 model code (MLX) with the layout a 16 GB Mac needs:
 Measurements behind every choice: docs/recipes/inkling-2-mini.md.
 """
 import logging
+import os
 
 import mlx.core as mx
 from mlx_lm.models.cache import ArraysCache, CacheList, KVCache
@@ -214,11 +215,25 @@ def install_bf16_loop_patch():
     ink._mix_messages = _mix_messages
 
 
-def shrink_weights(model, head_bits):
-    """bf16 loop controllers; optionally requantize the 8-bit output head.
-    6-bit head: mean KL 0.00027 against the 8-bit head (8-bit requantized to
-    itself: 0.00008), top-1 98.9% (99.5%); decode +0.7 tok/s on a base M4."""
+def _requant(lin, bits):
+    """A QuantizedLinear at `bits` (group 64) from an existing quantized one."""
     import mlx.nn as nn
+
+    w = mx.dequantize(lin.weight, lin.scales, lin.biases, group_size=lin.group_size, bits=lin.bits)
+    q = nn.QuantizedLinear(w.shape[1], w.shape[0], bias=False, group_size=64, bits=bits)
+    q.weight, q.scales, q.biases = mx.quantize(w, group_size=64, bits=bits)
+    mx.eval(q.weight, q.scales, q.biases)
+    return q
+
+
+ATTN_PROJS = ("in_proj", "q_proj", "k_proj", "v_proj", "o_proj")
+
+
+def shrink_weights(model, head_bits, attn_bits=8):
+    """bf16 loop controllers; optionally requantize the 8-bit output head and attention projections.
+    6-bit head: mean KL 0.00027 against the 8-bit head (8-bit requantized to
+    itself: 0.00008), top-1 98.9% (99.5%); decode +0.7 tok/s on a base M4.
+    attn_bits < 8 requantizes every attention projection (in/q/k/v/o, ~1.37 GB per token at 8 bits)."""
 
     for layer in model.model.layers:
         if hasattr(layer, "loop_down"):
@@ -226,12 +241,14 @@ def shrink_weights(model, head_bits):
             layer.loop_gain_forget = layer.loop_gain_forget.astype(mx.bfloat16)
     head = model.lm_head
     if head_bits and head_bits != getattr(head, "bits", head_bits):
-        w = mx.dequantize(head.weight, head.scales, head.biases,
-                          group_size=head.group_size, bits=head.bits)
-        q = nn.QuantizedLinear(w.shape[1], w.shape[0], bias=False, group_size=64, bits=head_bits)
-        q.weight, q.scales, q.biases = mx.quantize(w, group_size=64, bits=head_bits)
-        model.lm_head = q
-        del w
+        model.lm_head = _requant(head, head_bits)
+    if attn_bits and attn_bits != 8 or os.environ.get("NUEMAC_REQUANT_ATTN8"):
+        for layer in model.model.layers:
+            for name in ATTN_PROJS:
+                lin = getattr(layer.attn, name, None)
+                if lin is not None and hasattr(lin, "bits"):
+                    setattr(layer.attn, name, _requant(lin, attn_bits or 8))
+            mx.clear_cache()
     mx.eval(model.parameters())
     mx.clear_cache()
 
@@ -247,7 +264,7 @@ def load(model_path, options):
     install_bf16_loop_patch()
     model, tok = load_text_model(model_path)
     mx.eval(model.parameters())
-    shrink_weights(model, int(options.get("head_bits", 6)))
+    shrink_weights(model, int(options.get("head_bits", 6)), int(options.get("attn_bits", 8)))
     return model, tok
 
 
