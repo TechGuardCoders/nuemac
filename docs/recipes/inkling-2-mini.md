@@ -128,8 +128,8 @@ decode 17.4 / 18.0 -> 18.1 / 18.6. Quality check 12/12 on every run. Skipping th
 
 Why a separate server rather than a patch to oMLX's: oMLX's batch engine merges every request's cache into
 mlx-lm batch caches and its SSD prefix cache slices caches by token position, and neither fits a window cache.
-Nuemac serves one request at a time (as llama.cpp does here with `-np 1`), keeps the cache between turns of a
-conversation (a new turn only processes its new tokens), and speaks both llama-server's API (`/health`,
+Nuemac gives each sequence its own window and global caches and batches sequences itself (see
+[concurrent requests](#concurrent-requests-050)), keeps the cache between turns of a conversation (a new turn only processes its new tokens), and speaks both llama-server's API (`/health`,
 `/completion` with `timings`) and OpenAI's (`/v1/chat/completions` with streaming, `reasoning_content` and tool
 calls through oMLX's own Inkling output parser). Other gotchas on the way:
 
@@ -337,6 +337,40 @@ Tried and not shipped:
   server's code), against stock 8-bit: re-rounding the 8-bit weights alone gives mean KL 0.0045 and 97.6% top-1
   agreement (a looped model amplifies small weight changes); 6-bit gives 0.0057 and 97.1%; 5-bit 0.0101 and 95.8%.
   6-bit still answers 12/12 and finds the 32K needle, but it is a quality trade, so it stays a flag.
+
+## Concurrent requests (0.5.0)
+
+Up to `--slots` requests (default 4) run at once. They join and leave one decode batch between steps, the
+iteration-level scheduling vLLM uses, and long prompts prefill in 256-token chunks that take turns with decoding:
+
+- **An engine thread owns every MLX call.** HTTP threads hand it a request and read back events (streamed text,
+  done, error); a client that disconnects cancels its request.
+- **Each sequence keeps its own caches**, sized to prompt + `max_tokens` in bands (4K, 8K, 16K ... up to the
+  context). A request whose cache would not fit the memory budget waits for a running one to finish. Finished
+  conversations' caches stay (`--keep-caches`, default 2) for prompt reuse while memory allows.
+- **One request alone runs the compiled decode step**, so it is as fast as 0.4.0 and gives the same text. With two
+  or more, a batched step runs the projections, experts and head for all rows at once, and every row's attention
+  against its own cache in one kernel launch (`slots.py`, adapted from
+  [mlx-serve](https://github.com/ddalcu/mlx-serve)'s Inkling 2 slots kernel, with an 8-bit variant for the global
+  visits).
+
+| short prompts, 200-token greedy replies (totals include prefill) | M4 Pro 24 GB (oQ3e) | M4 16 GB (oQ2.5e) |
+| --- | --- | --- |
+| 1 request | 42.4 tok/s | 25.5 tok/s |
+| 2 at once, total | 45.7 tok/s (~24 each) | 29.1 tok/s (~15 each) |
+| 4 at once, total | 60.4 tok/s (~16 each) | 36.3 tok/s (~9.5 each) |
+| two quality checks at once | 12/12, 12/12 | 12/12, 12/12 |
+| a long prompt prefilling while another reply streams | 39K tokens; longest gap 0.95 s | 39K tokens; longest gap 1.5 s |
+
+Why 4 requests give ~1.4x, not 4x: a 4-row step on the M4 Pro takes 66 ms against 24 ms for one. Stubbing out
+attention entirely saves only ~14% of it; the rest is expert weights. Each row picks its own 8 of 128 experts per
+visit, so 4 rows read about 29 experts' weights a visit, ~3.7x one row's bytes. The slots kernel took the
+attention part from 69.5 to 66.4 ms (-4.5%); the expert reads are bandwidth.
+
+Greedy output is not batch-invariant: a row batched with others rounds differently than it does alone, so its
+tokens can drift from the single-request text after a few hundred characters (the text stays coherent). Two
+identical prompts sent together need not come back identical. vLLM and other batching servers behave the same way
+by default. `--slots 1` restores one request at a time; `NUEMAC_NO_SLOTS_KERNEL=1` falls back to per-row attention.
 
 ## Ideas not tried
 

@@ -2,16 +2,17 @@
 
 Speeds are from `nuemac bench`: a base Mac mini M4 (10-core GPU, 16 GB) at 96K context unless a line says otherwise.
 
-## Unreleased: continuous batching
+## 0.5.0 - 2026-11-22: continuous batching
 
 Several requests run at once: they join and leave one decode batch between steps (vLLM-style iteration-level
 scheduling). Measured on the M4 Pro 24 GB (oQ3e, 200-token greedy replies, short prompts):
 one request 42.2-42.6 tok/s, the same text as 0.4.0; 2 at once 45.7 tok/s total (~24 each); 4 at once 60.4 total
-(~16 each). Two quality checks run at the same time score 12/12 each.
+(~16 each). Base M4 16 GB (oQ2.5e): 25.5 alone, the same text as 0.4.0; 29.1 total for 2; 36.3 total for 4.
+Two quality checks run at the same time score 12/12 each on both Macs.
 - `engine/server.py`: an engine thread owns every MLX call and schedules sequences; HTTP threads submit requests
   and read their events (streamed deltas, done, error). A client that disconnects cancels its request.
 - Prompts prefill in chunks taking turns with decoding, so streams keep flowing: a 39K-token prompt prefilled while
-  another reply streamed 636 chunks, the longest gap 0.95 s (one chunk).
+  another reply streamed 636 chunks, the longest gap 0.95 s (one chunk); 1.5 s on the base M4.
 - Each sequence keeps its own caches, sized to prompt + max_tokens in bands (4K to 512K). A request waits when its
   cache would not fit the memory budget; finished conversations' caches stay for prompt reuse while memory allows.
 - One request alone still runs the compiled decode step. A batched step runs the projections, experts and head

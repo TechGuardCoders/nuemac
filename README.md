@@ -140,8 +140,8 @@ curl http://127.0.0.1:8080/v1/chat/completions -H 'Content-Type: application/jso
 
 Any OpenAI-compatible client works with base URL `http://127.0.0.1:8080/v1`; the API key can be anything. The
 server supports streaming, `reasoning_content`, tool calls and `reasoning_effort` (`low` / `medium` / `high`).
-It also speaks llama-server's `/completion` with `timings`. It serves one request at a time and keeps the
-conversation's cache, so a new turn only processes its new tokens.
+It also speaks llama-server's `/completion` with `timings`. Up to 4 requests run at once (continuous batching,
+`--slots`), and each conversation's cache is kept, so a new turn only processes its new tokens.
 
 | command | what it does |
 | --- | --- |
@@ -154,8 +154,8 @@ conversation's cache, so a new turn only processes its new tokens.
 ## Repository
 
 ```
-engine/server.py                 the engine: HTTP APIs, prefill/decode loop, multi-turn cache reuse
-engine/families/inkling2/        Inkling 2: cache layout, Metal decode kernel (q8attn.py), weight trims
+engine/server.py                 the engine: HTTP APIs, continuous batching, multi-turn cache reuse
+engine/families/inkling2/        Inkling 2: cache layout, Metal decode kernels (q8attn.py, slots.py), weight trims
 models/<model>.conf              pinned weights, file hashes, context, tested oMLX version
 bin/nuemac, install.sh           CLI and installer
 bench/                           the benchmark (curl + plutil, no Python)

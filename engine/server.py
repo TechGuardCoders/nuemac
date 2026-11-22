@@ -28,7 +28,7 @@ from mlx_lm.sample_utils import make_sampler  # noqa: E402
 
 from families import ContextFull, for_model  # noqa: E402
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 log = logging.getLogger("nuemac")
 
 BANDS = (4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288)

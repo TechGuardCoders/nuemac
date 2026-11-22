@@ -1,0 +1,81 @@
+{
+  "engine": "nuemac 0.5.0",
+  "date": "2026-11-22",
+  "test": "bench-free concurrency client: 4 essay prompts, 200 greedy tokens each, ignore_eos, cache_prompt false; totals = all tokens / wall time incl. prefill",
+  "machines": {
+    "Mac mini M4 Pro 24 GB, inkling-2-mini-oq3e, ctx 262144": {
+      "one_at_a_time_tok_s": [
+        42.2,
+        42.6
+      ],
+      "same_text_as_0.4.0": true,
+      "two_at_once_total_tok_s": 45.7,
+      "two_at_once_per_request": [
+        23.6,
+        24.1
+      ],
+      "four_at_once_total_tok_s": 60.4,
+      "four_at_once_per_request": [
+        15.8,
+        16.5
+      ],
+      "qa_two_concurrent": [
+        "12/12",
+        "12/12"
+      ],
+      "interleave": {
+        "long_prompt_tokens": 39000,
+        "prefill_tok_s": 275,
+        "chunks_streamed_during_prefill": 636,
+        "longest_gap_s": 0.95,
+        "errors": 0
+      },
+      "batched_step_ms": {
+        "B2": {
+          "slots_off": 45.0,
+          "slots_on": 43.65
+        },
+        "B4": {
+          "slots_off": 69.5,
+          "slots_on": 66.4
+        }
+      }
+    },
+    "Mac mini M4 16 GB, inkling-2-mini (oQ2.5e), ctx 98304": {
+      "cache_budget_gib": 2.7,
+      "one_at_a_time_tok_s": [
+        25.4,
+        25.5,
+        25.6,
+        25.6
+      ],
+      "same_text_as_0.4.0": true,
+      "two_at_once_total_tok_s": 29.1,
+      "two_at_once_per_request": [
+        15.0,
+        15.3
+      ],
+      "four_at_once_total_tok_s": 36.3,
+      "four_at_once_per_request": [
+        9.5,
+        9.5,
+        9.6,
+        9.8
+      ],
+      "qa_two_concurrent": [
+        "12/12",
+        "12/12"
+      ],
+      "interleave": {
+        "long_prompt_tokens": 39000,
+        "prefill_tok_s": 160,
+        "chunks_streamed_during_prefill": 724,
+        "longest_gap_s": 1.51,
+        "errors": 0
+      }
+    }
+  },
+  "notes": [
+    "greedy output of batched rows is not batch-invariant; two identical prompts sent together were not identical"
+  ]
+}
