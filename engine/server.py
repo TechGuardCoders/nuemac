@@ -40,6 +40,10 @@ class Engine:
         log.info("nuemac %s, family %s", __version__, self.family.NAME)
         self.model_path = model_path
         self.model, self.tok = self.family.load(model_path, options or {})
+        # Compiled single-token decode, when the family has one (inkling2: fastpath.py).
+        self.decoder = None
+        if (options or {}).get("compiled_decode", True) and hasattr(self.family, "make_decoder"):
+            self.decoder = self.family.make_decoder(self.model, options or {})
         self.ctx = ctx
         self.chunk = prefill_chunk
         self.cache = None
@@ -113,32 +117,46 @@ class Engine:
         y = sampler(logits)
         mx.eval(y)
         finish = "length"
-        for i in range(max_tokens):
-            tok = y.item()
-            if i + 1 < max_tokens and not (tok in self.stop_ids and not ignore_eos):
-                # Queue the next step before handing this token back.
-                nxt = sampler(self.model(y.reshape(1, 1), cache=self.cache)[:, -1, :])
-                mx.async_eval(nxt)
-                self.tokens.append(tok)
-            else:
-                nxt = None
-            out.append(tok)
-            if on_token is not None and on_token(tok) is False:
-                finish = "stop"
+        dec = self.decoder
+        if dec is not None:
+            dec.begin(self.cache)
+            step = lambda y: dec.step(y.reshape(1, 1))  # noqa: E731
+        else:
+            step = lambda y: self.model(y.reshape(1, 1), cache=self.cache)[:, -1, :]  # noqa: E731
+        try:
+            for i in range(max_tokens):
+                # Queue the next step before waiting for this token, so the GPU never idles while Python builds
+                # the next graph (waiting first cost ~2.8 ms per token on an M4 Pro). If this token turns out to
+                # stop the reply, the queued step is wasted once; the cache then holds the token, so it is
+                # recorded in self.tokens either way and prompt reuse stays exact.
+                if i + 1 < max_tokens:
+                    nxt = sampler(step(y))
+                    mx.async_eval(nxt)
+                else:
+                    nxt = None
+                tok = y.item()
                 if nxt is not None:
-                    mx.eval(nxt)
-                break
-            if tok in self.stop_ids and not ignore_eos:
-                finish = "stop"
-                break
-            if should_stop and should_stop():
-                finish = "stop"
-                if nxt is not None:
-                    mx.eval(nxt)
-                break
-            if nxt is None:
-                break
-            y = nxt
+                    self.tokens.append(tok)
+                out.append(tok)
+                if on_token is not None and on_token(tok) is False:
+                    finish = "stop"
+                    if nxt is not None:
+                        mx.eval(nxt)
+                    break
+                if tok in self.stop_ids and not ignore_eos:
+                    finish = "stop"
+                    break
+                if should_stop and should_stop():
+                    finish = "stop"
+                    if nxt is not None:
+                        mx.eval(nxt)
+                    break
+                if nxt is None:
+                    break
+                y = nxt
+        finally:
+            if dec is not None:
+                dec.end()
         t_gen = time.time() - t1
         n = len(out)
         stats.update({"predicted_n": n, "predicted_ms": t_gen * 1000,
@@ -450,6 +468,8 @@ def main():
     ap.add_argument("--ctx", type=int, default=98304)
     ap.add_argument("--prefill-chunk", type=int, default=256)
     ap.add_argument("--expect-omlx", default="", help="oMLX version the model's recipe was tested with")
+    ap.add_argument("--no-compiled-decode", action="store_true",
+                    help="decode eagerly (one MLX graph built per token) instead of the compiled decode step")
     ap.add_argument("--head-bits", type=int, default=6, choices=(4, 5, 6, 8),
                     help="inkling2: requantize the 8-bit output head (6: near-lossless, faster)")
     a = ap.parse_args()
@@ -457,7 +477,8 @@ def main():
     global WORKER
     MODEL_ID = a.alias
     WORKER = EngineThread(a.model, a.ctx, a.prefill_chunk,
-                          {"expect_omlx": a.expect_omlx, "head_bits": a.head_bits})
+                          {"expect_omlx": a.expect_omlx, "head_bits": a.head_bits,
+                           "compiled_decode": not a.no_compiled_decode})
     WORKER.start()
     WORKER.ready.wait()
     if WORKER.error is not None:

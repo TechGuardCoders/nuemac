@@ -170,6 +170,8 @@ def install_attend_patch():
     orig = ink.Inkling2Attention.attend
 
     def attend(self, q, k, v, rel, sink, kv):
+        if hasattr(kv, "decode_attend"):   # compiled decode (fastpath.py)
+            return kv.decode_attend(self, q, k, v, rel, sink)
         if isinstance(kv, Q8GlobalKVCache) and q.shape[0] == 1 and q.shape[2] == 1:
             kv.append(k, v)
             if kv.offset > FLASH_MIN:
@@ -239,6 +241,13 @@ def load(model_path, options):
     mx.eval(model.parameters())
     shrink_weights(model, int(options.get("head_bits", 6)))
     return model, tok
+
+
+def make_decoder(model, options):
+    """Compiled single-token decode (fastpath.py): same tokens as the eager path, less per-token overhead."""
+    from .fastpath import Decoder
+
+    return Decoder(model, WindowKVCache, Q8GlobalKVCache)
 
 
 def make_cache(model, ctx):
