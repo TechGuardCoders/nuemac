@@ -191,9 +191,17 @@ def install_bf16_loop_patch():
     were identical to the fp32 path on our checks; decode +0.4 tok/s."""
     from omlx.patches.inkling2 import model as ink
 
+    import os
+
+    from .mixkernel import mix_messages_row
+
+    fused = not os.environ.get("NUEMAC_NO_FUSED_MIX")   # debug switch: the MLX-ops path
+
     def _mix_messages(x, message, down, gain_forget):
         n, b, length, hidden = x.shape
         rows = b * length
+        if fused and rows == 1 and hidden % 256 == 0 and down.shape[-1] == 64:
+            return mix_messages_row(x, message, down, gain_forget)   # decode: 2 fused kernels instead of ~12
         z = mx.stack([ink._unit_rms(x), ink._unit_rms(message)], axis=1)
         z = z.astype(mx.bfloat16).reshape(2 * n, rows, hidden)
         low = (z @ down.reshape(2 * n, hidden, -1)).astype(mx.float32)
