@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nuemac: private inference at the edge</title>
-<meta name="description" content="Nuemac: private inference at the edge. A local LLM engine that brings 16 GB Macs to life. Inkling 2 Mini at 25.9 tok/s with a 96K context on a base 16 GB M4 Mac mini.">
+<meta name="description" content="Nuemac: private inference at the edge. A local LLM engine that brings 16 GB Macs to life. Inkling 2 Mini at 25.9 tok/s with a 96K context on a base 16 GB M4 Mac mini, up to 4 requests at once.">
 <meta property="og:title" content="Nuemac: private inference at the edge">
-<meta property="og:description" content="Inkling 2 Mini at 25.9 tok/s with a 96K context on a base 16 GB M4 Mac mini. One command. MLX with custom Metal kernels.">
+<meta property="og:description" content="Inkling 2 Mini at 25.9 tok/s with a 96K context on a base 16 GB M4 Mac mini. Up to 4 requests at once. One command. MLX with custom Metal kernels.">
 <meta property="og:image" content="https://techguardcoders.github.io/nuemac/assets/infographic.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="assets/tg-monogram.png">
@@ -120,6 +120,7 @@ footer img{height:16px;opacity:.8}
       <div class="links">
         <a href="#why">Why it's different</a>
         <a href="#numbers" class="hide-sm">Numbers</a>
+        <a href="#concurrency" class="hide-sm">Several users</a>
         <a href="#how" class="hide-sm">How it works</a>
         <a href="https://github.com/TechGuardCoders/nuemac">GitHub</a>
       </div>
@@ -145,7 +146,7 @@ footer img{height:16px;opacity:.8}
           <div><b>$0</b><span>per token, runs on your Mac</span></div>
         </div>
         <div class="sub" style="margin-top:18px">On a 24 GB Mac mini M4 Pro: <b>42.3 tok/s</b> with a <b>256K</b> context. The installer picks the build for your Mac's memory.</div>
-        <div class="sub" style="margin-top:8px">Up to 4 requests at once (continuous batching): <b>36.3 tok/s</b> total on the 16 GB mini, <b>60.4 tok/s</b> on the M4 Pro.</div>
+        <div class="sub" style="margin-top:8px">Up to 4 requests at once: <b>36.3 tok/s</b> total on the 16 GB mini, <b>60.4 tok/s</b> on the M4 Pro. <a href="#concurrency">How</a></div>
       </div>
     </div>
   </div>
@@ -194,6 +195,26 @@ footer img{height:16px;opacity:.8}
     </div>
     <div id="metrics"></div>
     <p class="note">At a nearly full window (a 94K-token prompt) Nuemac answers after 11.8 min and decodes at 13.7 tok/s; llama.cpp takes 42.6 min and decodes at 11.2. All three found a fact planted in a 32K prompt. Raw numbers: <a href="https://github.com/TechGuardCoders/nuemac/tree/main/results">results/</a>. The comparison builds install from <a href="https://github.com/TechGuardCoders/inkling2-mini-mac-recipe">inkling2-mini-mac-recipe</a>.</p>
+  </div>
+</section>
+
+<section id="concurrency">
+  <div class="wrap">
+    <h2>Several users at once</h2>
+    <p class="intro">Since 0.5.0, up to 4 requests run together. They join and leave one decode batch between steps, and a long prompt is read in chunks that take turns with the replies already streaming. One request alone is exactly as fast as before and gives the same text.</p>
+    <div class="cmp-wrap">
+      <table class="cmp">
+        <thead><tr><th>Short prompts, 200-token replies</th><th>16 GB M4 Mac mini</th><th class="us">24 GB M4 Pro Mac mini</th></tr></thead>
+        <tbody>
+          <tr><td>1 request</td><td>25.5 tok/s</td><td class="us">42.4 tok/s</td></tr>
+          <tr><td>2 at once, total</td><td>29.1 tok/s (~15 each)</td><td class="us">45.7 tok/s (~24 each)</td></tr>
+          <tr><td>4 at once, total</td><td>36.3 tok/s (~9.5 each)</td><td class="us">60.4 tok/s (~16 each)</td></tr>
+          <tr><td>Two quality checks at once</td><td>12/12, 12/12</td><td class="us">12/12, 12/12</td></tr>
+          <tr><td>Longest pause in a reply while a 39K-token prompt is read</td><td>1.5 s</td><td class="us">0.95 s</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Why 4 requests give ~1.4&times; and not 4&times;: each one picks its own 8 of 128 experts per layer pass, so 4 together read ~3.7&times; the expert weights of one. Attention is only ~14% of a step; batching it into one kernel launch (adapted from <a href="https://github.com/ddalcu/mlx-serve">mlx-serve</a>, MIT) cut the step 4.5%. Rows in a batch round slightly differently than alone, so greedy text can drift from a solo run, as in other batching servers. Raw numbers: <a href="https://github.com/TechGuardCoders/nuemac/blob/main/results/2026-11-22-nuemac-0.5.0-concurrency.json">results/</a>.</p>
   </div>
 </section>
 

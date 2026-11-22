@@ -2,7 +2,7 @@
 
 **Private inference at the edge.**
 
-<p align="center"><img src="docs/assets/infographic.png" alt="Nuemac: private inference at the edge. Inkling 2 Mini at 23.5 tok/s with a 96K context on a base 16 GB M4 Mac mini" width="820"></p>
+<p align="center"><img src="docs/assets/infographic.png" alt="Nuemac: private inference at the edge. Inkling 2 Mini at 25.9 tok/s with a 96K context on a base 16 GB M4 Mac mini, up to 4 requests at once" width="820"></p>
 
 Nuemac gives the Mac you already own a new life as a private AI machine. It's a local LLM engine for
 memory-tight Apple Silicon: big open models with long contexts, on a 16 GB Mac mini, served as an
@@ -58,6 +58,20 @@ that is +5% decode with the same answers.
 - The raw results are in [`results/`](results/). The experiments that failed are written up next to the ones that
   worked, in the [recipe](docs/recipes/inkling-2-mini.md).
 
+**Several users at once.** Up to 4 requests run together (continuous batching): they join and leave one decode
+batch between steps, and long prompts are read in chunks between the replies already streaming. One request
+alone is as fast as before and gives the same text.
+
+| short prompts, 200-token replies | 16 GB M4 Mac mini | 24 GB M4 Pro Mac mini |
+| --- | --- | --- |
+| 1 request | 25.5 tok/s | 42.4 tok/s |
+| 2 at once, total | 29.1 tok/s (~15 each) | 45.7 tok/s (~24 each) |
+| 4 at once, total | 36.3 tok/s (~9.5 each) | 60.4 tok/s (~16 each) |
+| longest pause in a reply while a 39K-token prompt is read | 1.5 s | 0.95 s |
+
+Four requests give ~1.4x, not 4x, because each picks its own experts and together they read ~3.7x the expert
+weights of one. Details: [concurrent requests](docs/recipes/inkling-2-mini.md#concurrent-requests-050).
+
 **Private by construction.** The server listens on loopback only (`127.0.0.1`). While serving, it held no
 connections beyond its own local clients. Weights are downloaded once, at install. There's no account, no
 telemetry and no per-token bill.
@@ -66,8 +80,8 @@ telemetry and no per-token bill.
 
 | Model | Machine checked | Speed | Recipe |
 | --- | --- | --- | --- |
-| **Inkling 2 Mini** (Thinking Machines), MLX oQ2.5e, 96K context: `inkling-2-mini` | Mac mini M4, 16 GB | **25.9 tok/s** decode, 191 tok/s prefill, 20.7 tok/s at 32K | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
-| **Inkling 2 Mini**, MLX oQ3e, 256K context: `inkling-2-mini-oq3e` | Mac mini M4 Pro, 24 GB | **42.3 tok/s** decode, 318 tok/s prefill, 33.8 tok/s at 32K | [inkling-2-mini, 24 GB](docs/recipes/inkling-2-mini.md#24-gb-m4-pro-256k-context) |
+| **Inkling 2 Mini** (Thinking Machines), MLX oQ2.5e, 96K context: `inkling-2-mini` | Mac mini M4, 16 GB | **25.9 tok/s** decode, 191 tok/s prefill, 20.7 tok/s at 32K; 36.3 tok/s total at 4 requests | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
+| **Inkling 2 Mini**, MLX oQ3e, 256K context: `inkling-2-mini-oq3e` | Mac mini M4 Pro, 24 GB | **42.3 tok/s** decode, 318 tok/s prefill, 33.8 tok/s at 32K; 60.4 tok/s total at 4 requests | [inkling-2-mini, 24 GB](docs/recipes/inkling-2-mini.md#24-gb-m4-pro-256k-context) |
 
 The installer picks the build for your Mac's memory: the 16 GB build below 24 GB, the 256K build at 24 GB or more.
 
@@ -103,6 +117,8 @@ What Nuemac does for this model (details and every experiment in the [recipe](do
    73 ms for plain MLX ops.
 4. **Fewer bytes per token.** The loop controllers stay bf16 instead of fp32 copies, and the output head runs
    at 6 bits (KL 0.0003 against 8-bit). Together: +5% decode.
+5. **Continuous batching** (0.5.0): up to 4 requests share each decode step, with every row's attention in one
+   Metal launch over its own window and 8-bit caches. 4 at once: 36.3 tok/s total.
 
 ## Requirements
 
