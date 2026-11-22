@@ -404,7 +404,10 @@ Nuemac drafts only copies, and only when the copy is certain enough to be worth 
 | code, temperature 0 / 1 | 42.6 / 42.1 | 41.9 / 41.6 | 43.7 / 43.4 | 43.1 / 42.9 |
 | 240-line file rewrite, temperature 0 / 1 | 40.8 / 40.7 | **66.3 / 69.5** | 42.1 / 41.9 | **69.1 / 72.5** |
 
-On the rewrite, 2,801-2,919 of ~2,900 drafted tokens were accepted in ~200 checks (~14 per check). The quality
+On the base M4 16 GB (oQ2.5e, oMLX 0.8.2, temperature 0), 0.5.0 -> 0.6.0: prose 25.9 -> 26.1, code 26.0 -> 25.6,
+the rewrite **24.4 -> 43.5 tok/s** (2,897 of 2,957 drafted tokens accepted), quality check 12/12.
+
+On the M4 Pro rewrite, 2,801-2,919 of ~2,900 drafted tokens were accepted in ~200 checks (~14 per check). The quality
 check scores 12/12 with drafting on; 2 and 4 requests at once are unchanged (45.8 and 60.6 tok/s total). As with
 batching, a drafted stretch can round differently from one-token steps, so greedy text may differ from 0.5.0 after
 a draft. `--draft off` turns it off.

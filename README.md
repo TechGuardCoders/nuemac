@@ -80,7 +80,7 @@ telemetry and no per-token bill.
 
 | Model | Machine checked | Speed | Recipe |
 | --- | --- | --- | --- |
-| **Inkling 2 Mini** (Thinking Machines), MLX oQ2.5e, 96K context: `inkling-2-mini` | Mac mini M4, 16 GB | **25.9 tok/s** decode, 191 tok/s prefill, 20.7 tok/s at 32K; 36.3 tok/s total at 4 requests | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
+| **Inkling 2 Mini** (Thinking Machines), MLX oQ2.5e, 96K context: `inkling-2-mini` | Mac mini M4, 16 GB | **25.9 tok/s** decode, 191 tok/s prefill, 20.7 tok/s at 32K; 36.3 tok/s total at 4 requests; 43.5 tok/s rewriting a file | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
 | **Inkling 2 Mini**, MLX oQ3e, 256K context: `inkling-2-mini-oq3e` | Mac mini M4 Pro, 24 GB | **42.3 tok/s** decode, 318 tok/s prefill, 33.8 tok/s at 32K; 60.4 tok/s total at 4 requests; 66-72 tok/s rewriting a file | [inkling-2-mini, 24 GB](docs/recipes/inkling-2-mini.md#24-gb-m4-pro-256k-context) |
 
 The installer picks the build for your Mac's memory: the 16 GB build below 24 GB, the 256K build at 24 GB or more.
@@ -120,8 +120,8 @@ What Nuemac does for this model (details and every experiment in the [recipe](do
 5. **Continuous batching** (0.5.0): up to 4 requests share each decode step, with every row's attention in one
    Metal launch over its own window and 8-bit caches. 4 at once: 36.3 tok/s total.
 6. **Copy drafting** (0.6.0): a reply that repeats its context (a rewritten file, an edit) is drafted from that
-   context and checked up to 16 tokens at a time: 40.8 -> 66-72 tok/s on a file rewrite on the M4 Pro, prose
-   unchanged. [Details](docs/recipes/inkling-2-mini.md#copy-drafting-060).
+   context and checked up to 16 tokens at a time: a file rewrite goes 40.8 -> 66-72 tok/s on the M4 Pro and 24.4 -> 43.5
+   on the 16 GB M4, prose unchanged. [Details](docs/recipes/inkling-2-mini.md#copy-drafting-060).
 
 ## Requirements
 

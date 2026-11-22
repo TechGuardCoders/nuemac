@@ -7,7 +7,7 @@ Speeds are from `nuemac bench`: a base Mac mini M4 (10-core GPU, 16 GB) at 96K c
 - Copy drafting: while one request decodes alone, a reply that repeats its context (a rewritten file, an edit,
   quoted code) is drafted from that context and checked up to 16 tokens per forward pass. M4 Pro 24 GB (oQ3e),
   rewriting a 240-line file: 40.8 -> 66.3 tok/s on oMLX 0.8.2 (69.5 at temperature 1), 42.1 -> 69.1 on 0.8.3
-  (72.5); ~14 tokens accepted per check. Prose is unchanged, code within 1.5%. Quality check 12/12; 2 and 4
+  (72.5); ~14 tokens accepted per check. Base M4 16 GB (oQ2.5e): 24.4 -> 43.5. Prose is unchanged, code within 1.5%. Quality check 12/12; 2 and 4
   requests at once unchanged. `--draft off` turns it off.
   - Drafts come only from long exact runs (12 tokens), the lookup never waits on the GPU, and temperature
     sampling stays exact (each drafted token is kept only if it equals the token the request's sampler draws).

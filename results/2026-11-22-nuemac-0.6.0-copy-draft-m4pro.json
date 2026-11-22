@@ -108,5 +108,23 @@
       "code": 46.3,
       "rewrite": 56.9
     }
+  },
+  "base_m4_16gb_oq25e_omlx_0.8.2_temp0": {
+    "0.5.0": {
+      "prose": 25.94,
+      "code": 25.95,
+      "rewrite": 24.38
+    },
+    "0.6.0": {
+      "prose": 26.06,
+      "code": 25.55,
+      "rewrite": 43.5
+    },
+    "rewrite_drafts": {
+      "checks": 209,
+      "drafted": 2957,
+      "accepted": 2897
+    },
+    "qa": "12/12"
   }
 }
