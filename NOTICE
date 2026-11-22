@@ -24,6 +24,11 @@ Comparison builds (benchmarked in the docs, not installed by Nuemac)
 - PrismML llama.cpp fork (https://github.com/PrismML-Eng/llama.cpp), MIT, with Ternary Bonsai 2 27B by
   PrismML (Apache-2.0), derived from Qwen3.8-27B by the Qwen team (Alibaba Cloud).
 
+Adapted code
+- mlx-serve (https://github.com/ddalcu/mlx-serve), MIT, Copyright (c) 2026 David Dalcu: the batched decode
+  attention in engine/families/inkling2/slots.py is adapted from its Inkling 2 kernels relslots.metal and
+  relcomb.metal. The MIT notice is reproduced at the top of that file.
+
 Ideas and method
 - TensorFold (https://github.com/ashhart/TensorFold), MIT: the engine + supported-models + recipes layout.
 - Strata (https://github.com/Niko1221/Strata), MIT: kernel and dispatch ideas evaluated in the recipe.

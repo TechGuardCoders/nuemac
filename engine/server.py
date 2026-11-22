@@ -1,11 +1,11 @@
-"""Nuemac: a single-stream local LLM server for memory-tight Apple Silicon Macs.
+"""Nuemac: a local LLM server for memory-tight Apple Silicon Macs, with continuous batching.
 
 The engine (this file) is model-agnostic: chunked prefill that computes logits
 for the last position only, pipelined decode, multi-turn cache reuse (snapshot
 at the end of each prompt), and llama-server + OpenAI compatible HTTP APIs.
 A model family (engine/families/<name>/) supplies the model-specific parts:
 loading and patching, the KV-cache layout and kernels, stop tokens and the
-output parser. One request runs at a time.
+output parser. Requests run concurrently: they join and leave one decode batch between steps (Engine).
 
 API: /health, /completion (llama-server style, with "timings"), /v1/models and
 /v1/chat/completions (streaming, reasoning_content, tool calls).
@@ -31,140 +31,288 @@ from families import ContextFull, for_model  # noqa: E402
 __version__ = "0.4.0"
 log = logging.getLogger("nuemac")
 
+BANDS = (4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288)
+
+
+def band_for(n, ctx):
+    """The cache length a sequence gets: the first band holding n keys, capped at ctx (few distinct shapes, so the
+    compiled decode step compiles a handful of times)."""
+    for b in BANDS:
+        if n <= b:
+            return min(b, ctx)
+    return ctx
+
+
+class Request:
+    """One generation: filled by an HTTP thread, run by the engine thread, read back through `events`."""
+
+    def __init__(self, ids, max_tokens, sampler, ignore_eos=False, cache_prompt=True, on_token=None):
+        self.ids, self.max_tokens, self.sampler = list(ids), max_tokens, sampler
+        self.ignore_eos, self.cache_prompt, self.on_token = ignore_eos, cache_prompt, on_token
+        self.events = queue.Queue()      # ("done", out, stats) or ("error", exc)
+        self.cancelled = False
+        # engine-side state
+        self.cache = None
+        self.tokens = []                 # tokens whose K/V are in self.cache
+        self.snap = None                 # (n_tokens, family state) at the end of the prompt
+        self.todo = []                   # prompt tokens still to prefill
+        self.reused = 0
+        self.y = None                    # next token to emit (lazy)
+        self.out = []
+        self.max_len = 0
+        self.t1 = 0.0
+        self.t_prompt = 0.0
+
+    def cancel(self):
+        self.cancelled = True
+
+
 class Engine:
+    """Continuous batching: requests join and leave a running decode batch between steps.
+    - Each sequence has its own caches; a batched step runs the projections, experts and head for all rows at once
+      and each row's attention against its own cache (family.batch_cache). One sequence alone uses the compiled
+      decode step.
+    - Prompts prefill in chunks between decode steps, taking turns so decoding users keep getting tokens.
+    - Admission: at most `slots` sequences, and their caches (sized to prompt + max_tokens, in BANDS) must fit
+      the memory budget. Finished sequences' caches stay for prompt reuse while memory allows (`keep`)."""
+
     def __init__(self, model_path, ctx, prefill_chunk, options=None):
+        options = options or {}
         info = mx.device_info()
-        mx.set_wired_limit(int(info["max_recommended_working_set_size"]))
+        self.limit = int(info["max_recommended_working_set_size"])
+        mx.set_wired_limit(self.limit)
         mx.set_cache_limit(512 * 2**20)
         self.family = for_model(model_path)
         log.info("nuemac %s, family %s", __version__, self.family.NAME)
         self.model_path = model_path
-        self.model, self.tok = self.family.load(model_path, options or {})
-        # Compiled single-token decode, when the family has one (inkling2: fastpath.py).
+        self.model, self.tok = self.family.load(model_path, options)
         self.decoder = None
-        if (options or {}).get("compiled_decode", True) and hasattr(self.family, "make_decoder"):
-            self.decoder = self.family.make_decoder(self.model, options or {})
+        if options.get("compiled_decode", True) and hasattr(self.family, "make_decoder"):
+            self.decoder = self.family.make_decoder(self.model, options)
+        self.dec_seq = None              # the sequence the compiled decoder holds
         self.ctx = ctx
         self.chunk = prefill_chunk
-        self.cache = None
-        self.tokens = []   # tokens whose K/V are in self.cache, in order
-        self.snap = None   # (n_tokens, family state) at the end of the last prompt
+        self.slots = max(1, int(options.get("slots", 4)))
+        if not hasattr(self.family, "batch_cache"):
+            self.slots = 1
+        self.keep = max(0, int(options.get("keep_caches", 2)))
+        weights = mx.get_active_memory()
+        self.budget = self.limit - weights - int(float(options.get("reserve_gb", 1.5)) * 2**30)
         self.stop_ids = self.family.stop_ids(self.tok)
-        log.info("loaded %s: %.2f GiB weights, ctx %d, stop ids %s", model_path,
-                 mx.get_active_memory() / 2**30, ctx, sorted(self.stop_ids))
+        self.inbox = queue.Queue()
+        self.waiting, self.prefilling, self.decoding = [], [], []
+        self.idle = []                   # finished sequences kept for prompt reuse, oldest first
+        self.decode_credit = 0.0         # decode time owed before the next prefill chunk
+        log.info("loaded %s: %.2f GiB weights, ctx %d, %d slots, cache budget %.1f GiB, stop ids %s", model_path,
+                 weights / 2**30, ctx, self.slots, self.budget / 2**30, sorted(self.stop_ids))
 
-    # -- cache --------------------------------------------------------------
-    def _new_cache(self):
-        self.cache = None
-        self.tokens = []
-        self.snap = None
-        mx.clear_cache()
-        self.cache = self.family.make_cache(self.model, self.ctx)
-
-    def _take_snapshot(self):
-        self.snap = (len(self.tokens), self.family.snapshot(self.cache))
-
-    def _restore_snapshot(self):
-        n, st = self.snap
-        self.family.restore(self.cache, st)
-        self.tokens = self.tokens[:n]
-
-    def _reuse(self, ids, allow):
-        """Return how many leading prompt tokens are already in the cache."""
-        if not allow or self.cache is None:
-            self._new_cache()
-            return 0
-        n = len(self.tokens)
-        if n and len(ids) > n and ids[:n] == self.tokens:
-            return n
-        if self.snap is not None:
-            m = self.snap[0]
-            if m and len(ids) > m and ids[:m] == self.tokens[:m]:
-                self._restore_snapshot()
-                return m
-        self._new_cache()
+    # -- memory -------------------------------------------------------------------------------------------------
+    def _bytes(self, max_len):
+        if hasattr(self.family, "cache_bytes"):
+            return self.family.cache_bytes(self.model, max_len)
         return 0
 
-    # -- generation -----------------------------------------------------------
-    def generate(self, ids, max_tokens, sampler, ignore_eos=False, cache_prompt=True,
-                 on_token=None, should_stop=None):
-        """Yields token ids. Fills stats dict on self.last_stats."""
-        if len(ids) + max_tokens > self.ctx:
-            max_tokens = self.ctx - len(ids)
-            if max_tokens < 1:
-                raise ContextFull(f"prompt is {len(ids)} tokens; context is {self.ctx}")
-        reused = self._reuse(ids, cache_prompt)
-        todo = ids[reused:]
-        t0 = time.time()
-        logits = None
-        for s in range(0, len(todo), self.chunk):
-            x = mx.array(todo[s : s + self.chunk])[None]
-            h = self.model.model(x, self.cache)
-            logits = self.model.logits_from_hidden(h[:, -1:, :])[:, -1, :]
-            mx.eval(logits)
-            del h
+    def _in_use(self):
+        return sum(self._bytes(r.max_len) for r in self.prefilling + self.decoding + self.idle)
+
+    # -- admission ----------------------------------------------------------------------------------------------
+    @staticmethod
+    def _reuse_len(req, r):
+        """(tokens reusable from idle sequence r, whether its prompt snapshot must be restored)."""
+        n = len(r.tokens)
+        if n and len(req.ids) > n and req.ids[:n] == r.tokens:
+            return n, False
+        if r.snap is not None:
+            m = r.snap[0]
+            if m and len(req.ids) > m and req.ids[:m] == r.tokens[:m]:
+                return m, True
+        return 0, False
+
+    def _peek_reusable(self, req):
+        best, best_n = None, 0
+        for r in self.idle:
+            n, _ = self._reuse_len(req, r)
+            if n > best_n:
+                best, best_n = r, n
+        return best
+
+    def _claim(self, req, r):
+        """Move idle sequence r's cache into req. Returns the reused token count."""
+        n, use_snap = self._reuse_len(req, r)
+        self.idle.remove(r)
+        req.cache, req.tokens, req.snap, req.max_len = r.cache, r.tokens, r.snap, r.max_len
+        r.cache = None
+        if use_snap:
+            self.family.restore(req.cache, req.snap[1])
+            req.tokens = req.tokens[:n]
+        return n
+
+    def _admit(self):
+        while self.waiting and len(self.prefilling) + len(self.decoding) < self.slots:
+            req = self.waiting[0]
+            if req.cancelled:
+                self.waiting.pop(0)
+                req.events.put(("done", [], self._stats(req, "stop")))
+                continue
+            if len(req.ids) + req.max_tokens > self.ctx:
+                req.max_tokens = self.ctx - len(req.ids)
+                if req.max_tokens < 1:
+                    self.waiting.pop(0)
+                    req.events.put(("error", ContextFull(f"prompt is {len(req.ids)} tokens; context is {self.ctx}")))
+                    continue
+            need = band_for(len(req.ids) + req.max_tokens, self.ctx)
+            # memory first: a new cache (or a reused one grown to `need`) must fit beside the running ones
+            cand = self._peek_reusable(req) if req.cache_prompt else None
+            new_bytes = self._bytes(need) - (self._bytes(cand.max_len) if cand is not None else 0)
+            while self._in_use() + new_bytes > self.budget and [r for r in self.idle if r is not cand]:
+                self.idle.remove([r for r in self.idle if r is not cand][0])
+                mx.clear_cache()
+            if self._in_use() + new_bytes > self.budget and (self.prefilling or self.decoding):
+                return                              # wait for a running sequence to finish
+            self.waiting.pop(0)
+            reused = self._claim(req, cand) if cand is not None else 0
+            if req.cache is not None and req.max_len < need:
+                self.family.fit_cache(req.cache, need)
+                req.max_len = need
+            if req.cache is None:
+                req.cache = self.family.make_cache(self.model, need)
+                req.tokens, req.snap, req.max_len = [], None, need
+            req.reused = reused
+            req.todo = req.ids[reused:]
+            self.prefilling.append(req)
+
+    # -- prefill --------------------------------------------------------------------------------------------------
+    def _prefill_chunk(self, req):
+        t = time.time()
+        part = req.todo[: self.chunk]
+        h = self.model.model(mx.array(part)[None], req.cache)
+        logits = self.model.logits_from_hidden(h[:, -1:, :])[:, -1, :]
+        mx.eval(logits)
+        del h
+        mx.clear_cache()                      # prefill workspaces are large; don't let the pool keep them
+        req.tokens.extend(part)
+        req.todo = req.todo[len(part):]
+        dt = time.time() - t
+        req.t_prompt += dt
+        self.decode_credit = dt               # decoding sequences get as much time before the next chunk
+        if req.cancelled:
+            self.prefilling.remove(req)
+            self._finish(req, "stop")
+            return
+        if not req.todo:
+            req.snap = (len(req.tokens), self.family.snapshot(req.cache))
+            req.y = req.sampler(logits)
+            mx.eval(req.y)
+            req.t1 = time.time()
+            self.prefilling.remove(req)
+            self.decoding.append(req)
             mx.clear_cache()
-            self.tokens.extend(todo[s : s + self.chunk])
-            if should_stop and should_stop():
-                break
-        t_prompt = time.time() - t0
-        self._take_snapshot()
-        stats = {"prompt_n": len(todo), "cache_n": reused,
-                 "prompt_ms": t_prompt * 1000,
-                 "prompt_per_second": len(todo) / t_prompt if t_prompt > 0 else 0.0}
-        out = []
-        t1 = time.time()
-        y = sampler(logits)
-        mx.eval(y)
-        finish = "length"
-        dec = self.decoder
-        if dec is not None:
-            dec.begin(self.cache)
-            step = lambda y: dec.step(y.reshape(1, 1))  # noqa: E731
+
+    # -- decode ---------------------------------------------------------------------------------------------------
+    def _use_decoder(self, req):
+        """Hand the compiled decoder to req (or to nobody)."""
+        if self.decoder is None or self.dec_seq is req:
+            return
+        if self.dec_seq is not None:
+            self.decoder.end()
+            self.dec_seq = None
+        if req is not None:
+            self.decoder.begin(req.cache)
+            self.dec_seq = req
+
+    def _decode_step(self):
+        t = time.time()
+        # a sequence about to emit its last allowed token is not stepped (its cache has no room past it)
+        last = [r for r in self.decoding if len(r.out) + 1 >= r.max_tokens]
+        step = [r for r in self.decoding if r not in last]
+        nxts = []
+        if step:
+            if len(step) == 1 and self.decoder is not None:
+                self._use_decoder(step[0])
+                logits = self.decoder.step(step[0].y.reshape(1, 1))
+            else:
+                self._use_decoder(None)
+                ys = mx.concatenate([r.y.reshape(1, 1) for r in step], axis=0)
+                cache = step[0].cache if len(step) == 1 else self.family.batch_cache([r.cache for r in step])
+                logits = self.model(ys, cache=cache)[:, -1, :]
+            nxts = [r.sampler(logits[i:i + 1]) for i, r in enumerate(step)]
+            mx.async_eval(nxts)               # queue the next step before reading this one's tokens
+        for r, nxt in zip(step, nxts):
+            tok = r.y.item()
+            r.tokens.append(tok)              # the queued step fed it: the cache holds it
+            r.out.append(tok)
+            stop = (tok in self.stop_ids and not r.ignore_eos) or r.cancelled
+            if not stop and r.on_token is not None and r.on_token(tok) is False:
+                stop = True
+            if stop:
+                self.decoding.remove(r)
+                self._finish(r, "stop")
+            else:
+                r.y = nxt
+        for r in last:
+            tok = r.y.item()
+            r.out.append(tok)
+            if r.on_token is not None:
+                r.on_token(tok)
+            self.decoding.remove(r)
+            self._finish(r, "stop" if tok in self.stop_ids and not r.ignore_eos else "length")
+        self.decode_credit -= time.time() - t
+
+    # -- finish ---------------------------------------------------------------------------------------------------
+    def _stats(self, req, finish):
+        n = len(req.out)
+        t_gen = time.time() - req.t1 if req.t1 else 0.0
+        return {"prompt_n": len(req.ids) - req.reused, "cache_n": req.reused, "prompt_ms": req.t_prompt * 1000,
+                "prompt_per_second": (len(req.ids) - req.reused) / req.t_prompt if req.t_prompt > 0 else 0.0,
+                "predicted_n": n, "predicted_ms": t_gen * 1000,
+                "predicted_per_second": (n - 1) / t_gen if n > 1 and t_gen > 0 else 0.0, "finish": finish}
+
+    def _finish(self, req, finish):
+        if self.dec_seq is req:
+            self._use_decoder(None)
+        req.on_token = None
+        if req.cache_prompt and req.cache is not None and self.keep:
+            self.idle.append(req)
+            while len(self.idle) > self.keep:
+                self.idle.pop(0)
         else:
-            step = lambda y: self.model(y.reshape(1, 1), cache=self.cache)[:, -1, :]  # noqa: E731
-        try:
-            for i in range(max_tokens):
-                # Queue the next step before waiting for this token, so the GPU never idles while Python builds
-                # the next graph (waiting first cost ~2.8 ms per token on an M4 Pro). If this token turns out to
-                # stop the reply, the queued step is wasted once; the cache then holds the token, so it is
-                # recorded in self.tokens either way and prompt reuse stays exact.
-                if i + 1 < max_tokens:
-                    nxt = sampler(step(y))
-                    mx.async_eval(nxt)
-                else:
-                    nxt = None
-                tok = y.item()
-                if nxt is not None:
-                    self.tokens.append(tok)
-                out.append(tok)
-                if on_token is not None and on_token(tok) is False:
-                    finish = "stop"
-                    if nxt is not None:
-                        mx.eval(nxt)
-                    break
-                if tok in self.stop_ids and not ignore_eos:
-                    finish = "stop"
-                    break
-                if should_stop and should_stop():
-                    finish = "stop"
-                    if nxt is not None:
-                        mx.eval(nxt)
-                    break
-                if nxt is None:
-                    break
-                y = nxt
-        finally:
-            if dec is not None:
-                dec.end()
-        t_gen = time.time() - t1
-        n = len(out)
-        stats.update({"predicted_n": n, "predicted_ms": t_gen * 1000,
-                      "predicted_per_second": (n - 1) / t_gen if n > 1 and t_gen > 0 else 0.0,
-                      "finish": finish})
-        self.last_stats = stats
+            req.cache = None
+        req.events.put(("done", req.out, self._stats(req, finish)))
         mx.clear_cache()
-        return out
+
+    # -- the loop -------------------------------------------------------------------------------------------------
+    def submit(self, req):
+        self.inbox.put(req)
+
+    def run_forever(self):
+        while True:
+            busy = bool(self.prefilling or self.decoding)
+            try:
+                if not busy:
+                    self.waiting.append(self.inbox.get(timeout=None if not self.waiting else 0.05))
+                while True:
+                    self.waiting.append(self.inbox.get_nowait())
+            except queue.Empty:
+                pass
+            try:
+                self._admit()
+                if self.prefilling and (not self.decoding or self.decode_credit <= 0):
+                    self._prefill_chunk(self.prefilling[0])
+                elif self.decoding:
+                    self._decode_step()
+            except Exception as e:  # noqa: BLE001  fail the requests in flight, keep serving
+                log.exception("engine step failed")
+                if self.dec_seq is not None:
+                    try:
+                        self.decoder.end()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self.dec_seq = None
+                for r in self.prefilling + self.decoding:
+                    r.cache = None
+                    r.events.put(("error", e))
+                self.prefilling, self.decoding = [], []
+                mx.clear_cache()
 
 
 def sampler_from(body):
@@ -217,13 +365,12 @@ MODEL_ID = "local"
 
 
 class EngineThread(threading.Thread):
-    """Owns every MLX call: MLX streams belong to the thread that made them,
-    so the model loads here and requests run here, one at a time."""
+    """Owns every MLX call: MLX streams belong to the thread that made them, so the model loads here and the
+    scheduler runs here. HTTP threads only submit requests and read their events."""
 
     def __init__(self, *engine_args):
         super().__init__(daemon=True, name="engine")
         self.engine_args = engine_args
-        self.jobs = queue.Queue()
         self.ready = threading.Event()
         self.error = None
 
@@ -236,22 +383,15 @@ class EngineThread(threading.Thread):
             self.ready.set()
             return
         self.ready.set()
-        while True:
-            fn, box, done = self.jobs.get()
-            try:
-                box["result"] = fn()
-            except BaseException as e:  # noqa: BLE001
-                log.exception("request failed")
-                box["error"] = e
-            done.set()
+        ENGINE.run_forever()
 
-    def call(self, fn):
-        box, done = {}, threading.Event()
-        self.jobs.put((fn, box, done))
-        done.wait()
-        if "error" in box:
-            raise box["error"]
-        return box["result"]
+    def generate(self, req):
+        """Submit and wait. Returns (tokens, stats)."""
+        ENGINE.submit(req)
+        kind, *rest = req.events.get()
+        if kind == "error":
+            raise rest[0]
+        return rest[0], rest[1]
 
 
 def timings(stats):
@@ -340,11 +480,9 @@ class Handler(BaseHTTPRequestHandler):
         prompt = body.get("prompt", "")
         ids = ENGINE.tok.encode(prompt) if isinstance(prompt, str) else list(prompt)
         n = int(body.get("n_predict", body.get("max_tokens", 128)))
-        out, st = WORKER.call(lambda: (
-            ENGINE.generate(ids, max(1, n), sampler_from(body),
-                            ignore_eos=bool(body.get("ignore_eos", False)),
-                            cache_prompt=bool(body.get("cache_prompt", True))),
-            ENGINE.last_stats))
+        out, st = WORKER.generate(Request(ids, max(1, n), sampler_from(body),
+                                          ignore_eos=bool(body.get("ignore_eos", False)),
+                                          cache_prompt=bool(body.get("cache_prompt", True))))
         text = ENGINE.tok.decode(out)
         return self._json(200, {"content": text, "tokens_predicted": len(out),
                                 "tokens_evaluated": len(ids), "model": MODEL_ID,
@@ -381,7 +519,9 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 state["broken"] = True
 
-        def emit(reasoning, content):
+        req = None
+
+        def emit(reasoning, content, direct=False):
             if reasoning:
                 parts["reasoning"].append(reasoning)
             if content:
@@ -392,9 +532,12 @@ class Handler(BaseHTTPRequestHandler):
                     d["reasoning_content"] = reasoning
                 if content:
                     d["content"] = content
-                send_chunk(d)
+                if direct:
+                    send_chunk(d)
+                else:
+                    req.events.put(("delta", d))     # engine thread: queue it, the HTTP thread writes
 
-        def on_token(tok):
+        def on_token(tok):                          # runs on the engine thread
             r = parser.process_token(tok)
             if r.visible_text:
                 emit(*router.feed(r.visible_text))
@@ -411,22 +554,29 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.close_connection = True
             send_chunk({"role": "assistant", "content": ""})
-        try:
-            # on_token runs on the engine thread; it only decodes and writes.
-            st = WORKER.call(lambda: (
-                ENGINE.generate(ids, max(1, max_tokens), sampler_from(body),
-                                cache_prompt=bool(body.get("cache_prompt", True)),
-                                on_token=on_token, should_stop=lambda: state["broken"]),
-                ENGINE.last_stats)[1])
-        except ContextFull as e:
-            if not stream:
-                raise
-            send_chunk({"content": f"[error: {e}]"}, "length")
-            return
+        req = Request(ids, max(1, max_tokens), sampler_from(body),
+                      cache_prompt=bool(body.get("cache_prompt", True)), on_token=on_token)
+        ENGINE.submit(req)
+        st = None
+        while st is None:
+            kind, *rest = req.events.get()
+            if kind == "delta":
+                if not state["broken"]:
+                    send_chunk(rest[0])
+                    if state["broken"]:
+                        req.cancel()                # client went away: stop at the next step
+            elif kind == "done":
+                st = rest[1]
+            else:
+                e = rest[0]
+                if not stream:
+                    raise e
+                send_chunk({"content": f"[error: {e}]"}, "length")
+                return
         fin = parser.finalize()
         if fin.visible_text:
-            emit(*router.feed(fin.visible_text))
-        emit(*router.feed("", final=True))
+            emit(*router.feed(fin.visible_text), direct=True)
+        emit(*router.feed("", final=True), direct=True)
         tool_calls = [{"id": "call_" + uuid.uuid4().hex[:24], "type": "function",
                        "function": {"name": t["name"], "arguments": t["arguments"]}}
                       for t in fin.tool_calls]
@@ -468,6 +618,10 @@ def main():
     ap.add_argument("--ctx", type=int, default=98304)
     ap.add_argument("--prefill-chunk", type=int, default=256)
     ap.add_argument("--expect-omlx", default="", help="oMLX version the model's recipe was tested with")
+    ap.add_argument("--slots", type=int, default=4,
+                    help="most sequences decoding at once (continuous batching); 1 = one request at a time")
+    ap.add_argument("--keep-caches", type=int, default=2,
+                    help="finished conversations whose caches stay for prompt reuse (memory permitting)")
     ap.add_argument("--no-compiled-decode", action="store_true",
                     help="decode eagerly (one MLX graph built per token) instead of the compiled decode step")
     ap.add_argument("--attn-bits", type=int, default=8, choices=(4, 5, 6, 8),
@@ -480,7 +634,8 @@ def main():
     MODEL_ID = a.alias
     WORKER = EngineThread(a.model, a.ctx, a.prefill_chunk,
                           {"expect_omlx": a.expect_omlx, "head_bits": a.head_bits, "attn_bits": a.attn_bits,
-                           "compiled_decode": not a.no_compiled_decode})
+                           "compiled_decode": not a.no_compiled_decode, "slots": a.slots,
+                           "keep_caches": a.keep_caches})
     WORKER.start()
     WORKER.ready.wait()
     if WORKER.error is not None:

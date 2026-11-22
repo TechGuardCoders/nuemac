@@ -2,6 +2,26 @@
 
 Speeds are from `nuemac bench`: a base Mac mini M4 (10-core GPU, 16 GB) at 96K context unless a line says otherwise.
 
+## Unreleased: continuous batching
+
+Several requests run at once: they join and leave one decode batch between steps (vLLM-style iteration-level
+scheduling). Measured on the M4 Pro 24 GB (oQ3e, 200-token greedy replies, short prompts):
+one request 42.2-42.6 tok/s, the same text as 0.4.0; 2 at once 45.7 tok/s total (~24 each); 4 at once 60.4 total
+(~16 each). Two quality checks run at the same time score 12/12 each.
+- `engine/server.py`: an engine thread owns every MLX call and schedules sequences; HTTP threads submit requests
+  and read their events (streamed deltas, done, error). A client that disconnects cancels its request.
+- Prompts prefill in chunks taking turns with decoding, so streams keep flowing: a 39K-token prompt prefilled while
+  another reply streamed 636 chunks, the longest gap 0.95 s (one chunk).
+- Each sequence keeps its own caches, sized to prompt + max_tokens in bands (4K to 512K). A request waits when its
+  cache would not fit the memory budget; finished conversations' caches stay for prompt reuse while memory allows.
+- One request alone still runs the compiled decode step. A batched step runs the projections, experts and head
+  for all rows at once and every row's attention in one launch (`engine/families/inkling2/slots.py`, adapted from
+  mlx-serve's Inkling 2 slots kernel, MIT): -4.5% step time at 4 rows. Most of a batched step is expert reads (4
+  rows touch ~29 of 128 experts a visit), so throughput grows ~1.4x at 4 rows, not 4x.
+- Greedy output is not batch-invariant: a row batched with others can take different tokens than it would alone
+  (kernel numerics), as in other batching servers.
+- `--slots N` (default 4; 1 = one request at a time), `--keep-caches N` (default 2), `NUEMAC_NO_SLOTS_KERNEL=1`.
+
 ## 0.4.0 - 2026-11-21: less per-token overhead
 
 Lossless decode speed-ups (same greedy tokens), end to end through the server:

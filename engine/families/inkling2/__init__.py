@@ -124,6 +124,25 @@ class Q8GlobalKVCache(KVCache):
     def restore(self, snap):
         self.offset = snap
 
+    def grow(self, max_len):
+        """Reallocate for max_len keys, keeping the first `offset` codes (a reused cache meeting a longer reply)."""
+        if max_len <= self.max_len:
+            return
+        if self.kq is not None:
+            old = (self.kq, self.ks, self.kb, self.vq, self.vs, self.vb)
+            n = self.offset
+            self.max_len = max_len
+            new = []
+            for a in old:
+                b = mx.zeros(a.shape[:2] + (max_len,) + a.shape[3:], a.dtype)
+                if n:
+                    b[..., :n, :] = a[..., :n, :]
+                new.append(b)
+            mx.eval(new)
+            self.kq, self.ks, self.kb, self.vq, self.vs, self.vb = new
+        else:
+            self.max_len = max_len
+
 
 def q8_decode_attention(q, kc, vc, rel, sink, scale, group, bits):
     """One query over 8-bit K/V via quantized_matmul (short contexts)."""
@@ -275,7 +294,81 @@ def make_decoder(model, options):
     return Decoder(model, WindowKVCache, Q8GlobalKVCache)
 
 
+# -- batched decode: B sequences, each with its own caches ---------------------------------------------------------
+
+class BatchKV:
+    """One layer visit's KV for a batched decode step: row i attends to sequence i's own cache, so sequences of
+    any lengths batch together. One launch reads every row's cache (slots.py); NUEMAC_NO_SLOTS_KERNEL=1 runs
+    the single-row paths row by row instead."""
+
+    def __init__(self, kvs):
+        self.kvs = kvs
+        self.offset = mx.array([kv.offset for kv in kvs], dtype=mx.int32)   # log_tau reads per-row positions
+
+    def decode_attend(self, attn, q, k, v, rel, sink):
+        from omlx.patches.inkling2 import model as ink
+
+        from . import slots
+
+        if slots.ENABLED and isinstance(self.kvs[0], WindowKVCache) and q.shape[2] == 1:
+            # sliding visits: append each row's key, then one launch reads every row's window (slots.py)
+            for i, kv in enumerate(self.kvs):
+                kv.update_and_fetch(k[i:i + 1], v[i:i + 1])
+            return slots.window_slots_attend(q, self.kvs, rel, sink, attn.scale, attn.window)
+        if slots.ENABLED and isinstance(self.kvs[0], Q8GlobalKVCache) and q.shape[2] == 1:
+            for i, kv in enumerate(self.kvs):
+                kv.append(k[i:i + 1], v[i:i + 1])
+            return slots.global_slots_attend(q, self.kvs, rel, sink, attn.scale)
+        attend = ink.Inkling2Attention.attend   # Nuemac's patched attend
+        rows = [attend(attn, q[i:i + 1], k[i:i + 1], v[i:i + 1], rel[i:i + 1], sink[i:i + 1], kv)
+                for i, kv in enumerate(self.kvs)]
+        return mx.concatenate(rows, axis=0)
+
+
+class BatchConv:
+    """One layer visit's short-conv states for a batched step: rows stacked on read, split back on write."""
+
+    def __init__(self, convs):
+        self.convs = convs
+
+    def __getitem__(self, slot):
+        states = [c[slot] for c in self.convs]
+        if any(s is None for s in states):
+            return None
+        return mx.concatenate(states, axis=0)
+
+    def __setitem__(self, slot, value):
+        for i, c in enumerate(self.convs):
+            c[slot] = value[i:i + 1]
+
+
+def batch_cache(caches):
+    """Per-visit [BatchKV, BatchConv] over B sequences' caches (each from make_cache)."""
+    return [[BatchKV([c[v][0] for c in caches]), BatchConv([c[v][1] for c in caches])]
+            for v in range(len(caches[0]))]
+
+
+def cache_bytes(model, max_len):
+    """Estimated bytes one sequence's caches take: 8-bit global K/V for max_len keys, the window caches."""
+    args = model.args.text if hasattr(model.args, "text") else model.args
+    sched = model.model._schedule
+    n_global = sum(1 for idx, _p in sched if not args.is_sliding(idx))
+    n_window = len(sched) - n_global
+    per_key = 2 * args.num_key_value_heads * (args.head_dim + 2 * 2 * (args.head_dim // 64))   # codes + scales/biases
+    window_keys = args.sliding_window_size + 256 + 256                                          # keep + chunk + slack
+    win = 2 * args.swa_num_key_value_heads * args.swa_head_dim * 2 * window_keys
+    return n_global * per_key * max_len + n_window * win
+
+
+def fit_cache(cache, max_len):
+    """Make a (reused) cache hold max_len keys."""
+    for c in cache:
+        if isinstance(c[0], Q8GlobalKVCache):
+            c[0].grow(max_len)
+
+
 def make_cache(model, ctx):
+    """Caches for one sequence; `ctx` is the most keys it will hold (the 8-bit global buffers' length)."""
     args = model.args.text if hasattr(model.args, "text") else model.args
     out = []
     for idx, _pass in model.model._schedule:

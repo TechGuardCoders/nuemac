@@ -172,6 +172,8 @@ Nuemac is a thin layer over other people's work. Full notices are in [NOTICE](NO
 - [oMLX](https://github.com/jundot/omlx) for the MLX model code, chat handling and output parser.
   [MLX and mlx-lm](https://github.com/ml-explore) are by Apple.
 - [mlx-community](https://huggingface.co/mlx-community/Inkling-2-Mini-oQ2.5e-mtp) for the MLX weights.
+- [mlx-serve](https://github.com/ddalcu/mlx-serve) by David Dalcu: Nuemac's batched decode attention is adapted
+  from its Inkling 2 slots kernel (MIT).
 - [TensorFold](https://github.com/ashhart/TensorFold) for the engine-plus-recipes layout this repo follows, and
   [Strata](https://github.com/Niko1221/Strata) for kernel and dispatch ideas.
 - Comparison builds: [llama.cpp](https://github.com/ggml-org/llama.cpp),
