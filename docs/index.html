@@ -144,7 +144,7 @@ footer img{height:16px;opacity:.8}
           <div><b>191</b><span>tok/s prompt reading, 2.8× llama.cpp</span></div>
           <div><b>$0</b><span>per token, runs on your Mac</span></div>
         </div>
-        <div class="sub" style="margin-top:18px">On a 24 GB Mac mini M4 Pro: <b>42.1 tok/s</b> with a <b>256K</b> context. The installer picks the build for your Mac's memory.</div>
+        <div class="sub" style="margin-top:18px">On a 24 GB Mac mini M4 Pro: <b>42.3 tok/s</b> with a <b>256K</b> context. The installer picks the build for your Mac's memory.</div>
       </div>
     </div>
   </div>
@@ -272,9 +272,9 @@ nuemac models                     <span class="c"># supported models</span></pre
 <script>
 const M = [
   {name: "Decode", sub: "tok/s, short prompt", v: [25.9, 17.3, 10.9], f: ["25.9", "17.3", "10.9"]},
-  {name: "Prompt reading", sub: "tok/s, 16K-token prompt", v: [183, 61, 55], f: ["183", "61", "55"]},
-  {name: "Decode at 32K", sub: "tok/s, after a 32K prompt", v: [20.3, 12.2, 8.7], f: ["20.3", "12.2", "8.7"]},
-  {name: "Wait for first token", sub: "32K prompt, lower is better", v: [197, 690, 647], f: ["197 s", "690 s", "647 s"]},
+  {name: "Prompt reading", sub: "tok/s, 16K-token prompt", v: [176, 61, 55], f: ["176", "61", "55"]},
+  {name: "Decode at 32K", sub: "tok/s, after a 32K prompt", v: [20.7, 12.2, 8.7], f: ["20.7", "12.2", "8.7"]},
+  {name: "Wait for first token", sub: "32K prompt, lower is better", v: [201, 690, 647], f: ["201 s", "690 s", "647 s"]},
   {name: "Known-answer check", sub: "12 questions", v: [12, 12, 11], f: ["12/12", "12/12", "11/12"]}
 ];
 const root = document.getElementById('metrics');

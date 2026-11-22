@@ -1,0 +1,4 @@
+{"model":"inkling-2-mini-oq3e","label":"Inkling 2 Mini (oQ3e MLX, 24 GB Macs)","file":"mlx-community/Inkling-2-Mini-oQ3e-mtp@5552e32ec7a50fa8e9b0bfe2002aab72f8b78975","engine":"nuemac 0.4.0 inkling2 on oMLX 0.8.2","args":"ctx 262144",
+ "machine":{"chip":"Apple M4 Pro","gpu_cores":"16","ram_gb":24,"macos":"26.6.2"},
+ "decode_tok_s":42.29,"decode_runs":"42.3 42.1 42.2 42.3 42.3","prefill":[{"tokens":4086,"tok_s":318.4},{"tokens":16345,"tok_s":303.6}],"depth":{"tokens":32726,"prefill_tok_s":292.0,"ttft_s":112,"decode_tok_s":33.8,"needle":"pass"},
+ "qa":"12/12","mem_free_pct":"20%","date":"2026-11-22T02:38:53Z"}

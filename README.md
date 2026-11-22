@@ -66,8 +66,8 @@ telemetry and no per-token bill.
 
 | Model | Machine checked | Speed | Recipe |
 | --- | --- | --- | --- |
-| **Inkling 2 Mini** (Thinking Machines), MLX oQ2.5e, 96K context: `inkling-2-mini` | Mac mini M4, 16 GB | **25.9 tok/s** decode, 191 tok/s prefill, 20.3 tok/s at 32K | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
-| **Inkling 2 Mini**, MLX oQ3e, 256K context: `inkling-2-mini-oq3e` | Mac mini M4 Pro, 24 GB | **42.1 tok/s** decode, 318 tok/s prefill, 32.5 tok/s at 32K | [inkling-2-mini, 24 GB](docs/recipes/inkling-2-mini.md#24-gb-m4-pro-256k-context) |
+| **Inkling 2 Mini** (Thinking Machines), MLX oQ2.5e, 96K context: `inkling-2-mini` | Mac mini M4, 16 GB | **25.9 tok/s** decode, 191 tok/s prefill, 20.7 tok/s at 32K | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
+| **Inkling 2 Mini**, MLX oQ3e, 256K context: `inkling-2-mini-oq3e` | Mac mini M4 Pro, 24 GB | **42.3 tok/s** decode, 318 tok/s prefill, 33.8 tok/s at 32K | [inkling-2-mini, 24 GB](docs/recipes/inkling-2-mini.md#24-gb-m4-pro-256k-context) |
 
 The installer picks the build for your Mac's memory: the 16 GB build below 24 GB, the 256K build at 24 GB or more.
 
@@ -82,9 +82,9 @@ Same Mac, 96K context on every row, one model loaded, `nuemac bench --depth 3276
 | | **Nuemac** | llama.cpp b12600 | Ternary Bonsai 2 27B (PrismML llama.cpp) |
 | --- | --- | --- | --- |
 | decode, short prompt | **25.9 tok/s** | 17.3 tok/s | 10.9 tok/s |
-| prefill, 4K / 16K prompt | **191 / 183 tok/s** | 68 / 61 tok/s | 58 / 55 tok/s |
-| 32K prompt: first token | **197 s** | 690 s | 647 s |
-| 32K prompt: decode | **20.3 tok/s** | 12.2 tok/s | 8.7 tok/s |
+| prefill, 4K / 16K prompt | **191 / 176 tok/s** | 68 / 61 tok/s | 58 / 55 tok/s |
+| 32K prompt: first token | **201 s** | 690 s | 647 s |
+| 32K prompt: decode | **20.7 tok/s** | 12.2 tok/s | 8.7 tok/s |
 | fact planted at 32K | found | found | found |
 | 12 known-answer questions | 12/12 | 12/12 | 11/12 |
 

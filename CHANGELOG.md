@@ -5,8 +5,8 @@ Speeds are from `nuemac bench`: a base Mac mini M4 (10-core GPU, 16 GB) at 96K c
 ## 0.4.0 - 2026-11-21: less per-token overhead
 
 Lossless decode speed-ups (same greedy tokens), end to end through the server:
-M4 Pro 24 GB 35.9 -> 42.1 tok/s (32K: 29.6 -> 34.9 with 6-bit attention, 32.5 without); base M4 16 GB
-23.5 -> 25.9 tok/s (32K: 18.8 -> 20.3). 12/12 on both.
+M4 Pro 24 GB 35.9 -> 42.3 tok/s (32K: 29.4 -> 33.8); base M4 16 GB 23.5 -> 25.9 tok/s (32K: 18.8 -> 20.7).
+12/12 on both (`nuemac bench --depth 32768`, results/2026-11-21-nuemac-0.4.0-*.json).
 - The decode loop queues the next step before waiting for the current token. It used to wait first, leaving the
   GPU idle while Python built the next graph (~2.8 ms per token on an M4 Pro): 35.9 -> 39.4 tok/s.
 - Compiled decode step (`engine/families/inkling2/fastpath.py`): fixed-shape caches (a ring for the window
