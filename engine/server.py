@@ -8,9 +8,11 @@ loading and patching, the KV-cache layout and kernels, stop tokens and the
 output parser. Requests run concurrently: they join and leave one decode batch between steps (Engine).
 
 API: /health, /completion (llama-server style, with "timings"), /v1/models and
-/v1/chat/completions (streaming, reasoning_content, tool calls).
+/v1/chat/completions (streaming, reasoning_content, tool calls, images when the build has a vision tower).
 """
 import argparse
+import base64
+import hashlib
 import json
 import logging
 import os
@@ -18,6 +20,7 @@ import queue
 import sys
 import threading
 import time
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -35,7 +38,7 @@ from mlx_lm.sample_utils import make_sampler  # noqa: E402
 
 from families import ContextFull, for_model  # noqa: E402
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 log = logging.getLogger("nuemac")
 
 BANDS = (4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288)
@@ -53,9 +56,10 @@ def band_for(n, ctx):
 class Request:
     """One generation: filled by an HTTP thread, run by the engine thread, read back through `events`."""
 
-    def __init__(self, ids, max_tokens, sampler, ignore_eos=False, cache_prompt=True, on_token=None):
+    def __init__(self, ids, max_tokens, sampler, ignore_eos=False, cache_prompt=True, on_token=None, images=None):
         self.ids, self.max_tokens, self.sampler = list(ids), max_tokens, sampler
         self.ignore_eos, self.cache_prompt, self.on_token = ignore_eos, cache_prompt, on_token
+        self.images = images or {}       # image id (negative token stand-in) -> PromptImage
         self.events = queue.Queue()      # ("done", out, stats) or ("error", exc)
         self.cancelled = False
         # engine-side state
@@ -73,6 +77,21 @@ class Request:
 
     def cancel(self):
         self.cancelled = True
+
+
+class PromptImage:
+    """One image in a prompt. Its image tokens are written in the request's ids as one negative stand-in id (made from
+    the image's bytes and its place among the prompt's images), so prompt reuse can only match the same image at the
+    same place; prefill swaps the stand-ins for the image token and its embeddings for the image's features."""
+
+    def __init__(self, pixels, grid, start):
+        self.pixels, self.grid, self.start = pixels, grid, start
+        self.count = grid[1] * grid[2]
+        self.feats = None
+
+
+def image_stand_in(digest, k):
+    return -1 - (int(digest[:15], 16) ^ (k * 0x9E3779B1)) % (1 << 60)
 
 
 class CopyDrafter:
@@ -140,7 +159,9 @@ class CopyDrafter:
             return []
         k = min(self.k, limit)
         d = self.seq[best + 1:best + 1 + k]      # seq[best] is the guess for the pending token, checked as is
-        return d if len(d) >= 2 else []
+        if any(t < 0 for t in d):                # never draft into an image's stand-in tokens
+            d = d[:next(i for i, t in enumerate(d) if t < 0)]
+        return d if len(d) >= 2 and self.seq[best] >= 0 else []
 
     def update(self, drafted, accepted):
         self.stats[0] += 1
@@ -289,7 +310,10 @@ class Engine:
     def _prefill_chunk(self, req):
         t = time.time()
         part = req.todo[: self.chunk if self.decoding else self.chunk_alone]
-        h = self.model.model(mx.array(part)[None], req.cache)
+        if req.images and any(t < 0 for t in part):
+            h = self.model.model(None, req.cache, input_embeddings=self._image_embeds(req, part))
+        else:
+            h = self.model.model(mx.array(part)[None], req.cache)
         logits = self.model.logits_from_hidden(h[:, -1:, :])[:, -1, :]
         mx.eval(logits)
         del h
@@ -304,6 +328,9 @@ class Engine:
             self._finish(req, "stop")
             return
         if not req.todo:
+            had_images, req.images = bool(req.images), {}   # features and pixels only matter while reading the prompt
+            if had_images and hasattr(self.family, "release_vision") and                     not any(r.images for r in self.prefilling + self.waiting if r is not req):
+                self.family.release_vision(self.model)
             log.info("prompt read: %d tokens in %.1f s, peak GPU memory %.2f GiB", len(req.tokens) - req.reused,
                      req.t_prompt, mx.get_peak_memory() / 2**30)
             mx.reset_peak_memory()
@@ -314,6 +341,38 @@ class Engine:
             self.prefilling.remove(req)
             self.decoding.append(req)
             mx.clear_cache()
+
+    def _image_embeds(self, req, part):
+        """Prompt embeddings for a chunk holding image stand-ins: token embeddings, with each image's features (run
+        through the vision tower the first time a chunk reaches that image) in place of its image tokens."""
+        s = len(req.tokens)                   # absolute position of part[0]
+        img_tok = self.family.image_token_id(self.model)
+        clean = [img_tok if t < 0 else t for t in part]
+        emb = self.family.embed_tokens(self.model, mx.array(clean)[None])
+        pieces, i = [], 0
+        while i < len(part):
+            if part[i] >= 0:
+                j = i
+                while j < len(part) and part[j] >= 0:
+                    j += 1
+                pieces.append(emb[:, i:j])
+            else:
+                pid = part[i]
+                j = i
+                while j < len(part) and part[j] == pid:
+                    j += 1
+                img = req.images[pid]
+                if img.feats is None:
+                    t0 = time.time()
+                    img.feats = self.family.encode_image(self.model, img.pixels, img.grid)
+                    mx.eval(img.feats)
+                    img.pixels = None
+                    log.info("image %dx%d blocks (%d tokens) encoded in %.2f s", img.grid[2], img.grid[1],
+                             img.count, time.time() - t0)
+                off = s + i - img.start
+                pieces.append(img.feats[off:off + j - i][None].astype(emb.dtype))
+            i = j
+        return pieces[0] if len(pieces) == 1 else mx.concatenate(pieces, axis=1)
 
     # -- decode ---------------------------------------------------------------------------------------------------
     def _use_decoder(self, req):
@@ -567,6 +626,75 @@ def timings(stats):
                                   "cache_n", "draft_checks", "draft_n", "draft_accepted")}
 
 
+class BadRequest(Exception):
+    pass
+
+
+MAX_IMAGE_BYTES = 20 * 2**20
+MAX_IMAGE_TOKENS = 2304          # 40 px blocks per image; larger images are scaled down (2304 = 1920x1920 px area)
+
+
+def image_parts(msgs):
+    """Image content parts in prompt order (the order the chat template writes their image tokens)."""
+    for m in msgs:
+        c = m.get("content") if isinstance(m, dict) else None
+        if isinstance(c, list):
+            for p in c:
+                if isinstance(p, dict) and p.get("type") in ("image", "input_image", "image_url"):
+                    yield p
+
+
+def image_bytes(part):
+    v = part.get("image_url") or part.get("image") or part.get("url")
+    if isinstance(v, dict):
+        v = v.get("url")
+    if not isinstance(v, str) or not v:
+        raise BadRequest("image part without an image URL")
+    if v.startswith("data:"):
+        head, _, data = v.partition(",")
+        if ";base64" not in head:
+            raise BadRequest("image data URLs must be base64")
+        try:
+            return base64.b64decode(data, validate=False)
+        except ValueError as e:
+            raise BadRequest(f"bad base64 image: {e}") from None
+    if v.startswith(("http://", "https://")):
+        with urllib.request.urlopen(urllib.request.Request(v, headers={"User-Agent": "nuemac"}), timeout=20) as r:
+            data = r.read(MAX_IMAGE_BYTES + 1)
+        if len(data) > MAX_IMAGE_BYTES:
+            raise BadRequest(f"image over {MAX_IMAGE_BYTES >> 20} MB")
+        return data
+    raise BadRequest("image URL must be a data: URL or http(s)")
+
+
+def expand_images(ids, msgs):
+    """Each image part's single image token -> one stand-in id per 40 px block (PromptImage). Returns (ids, images)."""
+    parts = list(image_parts(msgs))
+    if not parts:
+        return ids, {}
+    fam = ENGINE.family
+    if not (hasattr(fam, "vision_ready") and fam.vision_ready(ENGINE.model)):
+        raise BadRequest("this model build reads text only: it has no vision tower")
+    img_tok = fam.image_token_id(ENGINE.model)
+    pos = [i for i, t in enumerate(ids) if t == img_tok]
+    if len(pos) != len(parts):
+        raise BadRequest(f"{len(parts)} images but {len(pos)} image places in the prompt")
+    out, images, last = [], {}, 0
+    for k, (p, part) in enumerate(zip(pos, parts)):
+        data = image_bytes(part)
+        try:
+            pixels, grid = fam.prepare_image(data, MAX_IMAGE_TOKENS)
+        except Exception as e:  # noqa: BLE001
+            raise BadRequest(f"image {k + 1} could not be read: {e}") from None
+        out.extend(ids[last:p])
+        pid = image_stand_in(hashlib.sha256(data).hexdigest(), k)
+        images[pid] = PromptImage(pixels, grid, len(out))
+        out.extend([pid] * images[pid].count)
+        last = p + 1
+    out.extend(ids[last:])
+    return out, images
+
+
 def canonical_messages(msgs):
     """OpenAI clients send an assistant tool call's arguments as a JSON string; chat templates such as
     Inkling's want the parsed object (and raise otherwise). Parse them; text that isn't JSON is kept under "raw"."""
@@ -619,7 +747,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.rstrip("/") in ("/v1/models", "/models"):
             return self._json(200, {"object": "list", "data": [
                 {"id": MODEL_ID, "object": "model", "owned_by": "local",
-                 "meta": {"n_ctx": ENGINE.ctx}}]})
+                 "meta": {"n_ctx": ENGINE.ctx, "vision": bool(getattr(ENGINE.family, "vision_ready", None)
+                                                              and ENGINE.family.vision_ready(ENGINE.model))}}]})
         return self._json(404, {"error": {"message": "not found"}})
 
     def do_POST(self):
@@ -635,6 +764,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.chat(body)
         except ContextFull as e:
             return self._json(400, {"error": {"message": str(e), "type": "exceed_context_size_error"}})
+        except BadRequest as e:
+            return self._json(400, {"error": {"message": str(e), "type": "invalid_request_error"}})
         except Exception as e:  # noqa: BLE001  answer with an error instead of dropping the connection
             log.exception("request failed")
             if not getattr(self, "_started", False):
@@ -663,10 +794,10 @@ class Handler(BaseHTTPRequestHandler):
         tools = body.get("tools") or None
         text = ENGINE.tok.apply_chat_template(msgs, tools=tools, add_generation_prompt=True,
                                               tokenize=False, **kwargs)
-        return ENGINE.tok.encode(text, add_special_tokens=False)
+        return expand_images(ENGINE.tok.encode(text, add_special_tokens=False), msgs)
 
     def chat(self, body):
-        ids = self._prompt_ids(body)
+        ids, images = self._prompt_ids(body)
         max_tokens = int(body.get("max_tokens") or body.get("max_completion_tokens") or 4096)
         stream = bool(body.get("stream", False))
         parser = ENGINE.family.output_parser(ENGINE.tok, ENGINE.model_path)
@@ -722,7 +853,7 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             send_chunk({"role": "assistant", "content": ""})
         req = Request(ids, max(1, max_tokens), sampler_from(body),
-                      cache_prompt=bool(body.get("cache_prompt", True)), on_token=on_token)
+                      cache_prompt=bool(body.get("cache_prompt", True)), on_token=on_token, images=images)
         ENGINE.submit(req)
         st = None
         while st is None:
@@ -776,7 +907,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global ENGINE, MODEL_ID
+    global ENGINE, MODEL_ID, MAX_IMAGE_TOKENS
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--model", required=True, help="MLX model directory")
     ap.add_argument("--alias", default=MODEL_ID)
@@ -801,14 +932,24 @@ def main():
                     help="inkling2: requantize the 8-bit attention projections")
     ap.add_argument("--head-bits", type=int, default=6, choices=(4, 5, 6, 8),
                     help="inkling2: requantize the 8-bit output head (6: near-lossless, faster)")
+    ap.add_argument("--vision", default="auto", choices=("auto", "resident", "lazy", "off"),
+                    help="inkling2: keep the vision tower in memory (resident), load it per image (lazy), or off; "
+                         "auto = lazy below a 20 GiB GPU limit")
+    ap.add_argument("--vision-bits", type=int, default=-1, choices=(-1, 0, 4, 8),
+                    help="inkling2: quantize the vision tower's linear layers (0: as stored; -1 auto: 8 below a "
+                         "20 GiB GPU limit, else 0)")
+    ap.add_argument("--max-image-tokens", type=int, default=MAX_IMAGE_TOKENS,
+                    help="40 px blocks per image; larger images are scaled down to fit")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     global WORKER
     MODEL_ID = a.alias
+    MAX_IMAGE_TOKENS = max(1, a.max_image_tokens)
     WORKER = EngineThread(a.model, a.ctx, a.prefill_chunk,
                           {"expect_omlx": a.expect_omlx, "head_bits": a.head_bits, "attn_bits": a.attn_bits,
                            "compiled_decode": not a.no_compiled_decode, "slots": a.slots, "draft": a.draft,
-                           "keep_caches": a.keep_caches, "prefill_chunk_alone": a.prefill_chunk_alone})
+                           "keep_caches": a.keep_caches, "prefill_chunk_alone": a.prefill_chunk_alone,
+                           "vision_bits": a.vision_bits, "vision": a.vision})
     WORKER.start()
     WORKER.ready.wait()
     if WORKER.error is not None:

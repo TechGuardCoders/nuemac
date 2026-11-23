@@ -161,7 +161,8 @@ Any OpenAI-compatible client works with base URL `http://127.0.0.1:8080/v1`; the
 server supports streaming, `reasoning_content`, tool calls and `reasoning_effort` (`low` / `medium` / `high`).
 It also speaks llama-server's `/completion` with `timings`. Up to 4 requests run at once (continuous batching,
 `--slots`), and each conversation's cache is kept, so a new turn only processes its new tokens. A reply that
-repeats its context, such as a rewritten file, is drafted from it (`--draft`, on by default).
+repeats its context, such as a rewritten file, is drafted from it (`--draft`, on by default). Images go in as
+`image_url` parts (base64 `data:` URLs or http(s) links); the vision tower loads per image on a 16 GB Mac.
 
 | command | what it does |
 | --- | --- |

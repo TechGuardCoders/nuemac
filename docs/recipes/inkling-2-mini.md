@@ -415,6 +415,37 @@ a draft. `--draft off` turns it off.
 Nuemac also runs on oMLX 0.8.3 now (0.8.3 maps cache entries to layer visits itself; Nuemac keeps its own
 per-visit caches). 0.8.3's smaller forward pass gives Nuemac ~2.5% more decode and ~12% faster prompt reading.
 
+## Images (0.7.0)
+
+Inkling 2 Mini's vision tower is a 23-layer ViT (hidden 1024, ~300M parameters, 607 MiB bf16) with 20 px patches;
+each 2x2 patch block (40x40 px) becomes one prompt token through a two-layer projector, so a 1280x720 screenshot is
+576 tokens and the image is not resized (it is padded to whole blocks). Nuemac uses oMLX's tower and processor
+code and adds what the engine needs:
+
+- The prompt's image tokens are written as one stand-in id per image, made from the image's bytes and its place,
+  so cached prompts are only reused for the same image at the same place. Prefill swaps them back to the image
+  token and puts the tower's features in place of their embeddings, chunk by chunk.
+- The tower runs once per image, when the first chunk reaches it; a follow-up turn reuses the cache and never
+  re-reads the image.
+
+Precision (features of four test images vs the released bf16 tower, base M4):
+
+| Tower linears | Size | Cosine vs bf16 | Relative error |
+| --- | --- | --- | --- |
+| bf16 (as released) | 607 MiB | 1 | 0 |
+| 8-bit, group 64 | 325 MiB | 0.997-0.999 | 4.5-7.0% |
+| 4-bit, group 64 | 174 MiB | 0.946-0.970 | 23-31% |
+
+Memory on 16 GB: keeping even the 8-bit tower loaded cut decode at a 94K-token prompt from 15.1 to 12.2 tok/s
+(the window's last GPU memory), so below a 20 GiB GPU limit the tower loads when an image arrives (0.1-0.3 s from
+SSD) and is freed when no prompt waits on one. With that, the 94K run matches the text-only build (712 s to the
+first token, 15.1 tok/s decode, needle found).
+
+Checks, 6/6 at bf16, 8-bit resident and 8-bit on demand: invoice number and total from a rendered invoice; the
+circle's color and side; counting dots; the open ticket numbers in a 1280x800 screenshot; a follow-up about the
+same image (169 of 184 prompt tokens reused); a different image at the same place (no reuse, correct answer). A
+3840x2160 photo is scaled to 2304 tokens, encoded in 4.5 s and described correctly.
+
 ## Ideas not tried
 
 - An 8-bit prefill kernel. Prefill falls from 190 to 135 tok/s by 94K, partly because every

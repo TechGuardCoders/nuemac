@@ -2,6 +2,26 @@
 
 Speeds are from `nuemac bench`: a base Mac mini M4 (10-core GPU, 16 GB) at 96K context unless a line says otherwise.
 
+## 0.7.0 - 2026-11-23: images
+
+- Inkling 2 Mini reads images. Send OpenAI-style `image_url` parts (base64 `data:` URLs or http(s) links) in user or
+  tool messages; both pinned builds ship the vision tower. Each 40 px block of an image is one prompt token (a
+  1280x720 screenshot is 576); images over `--max-image-tokens` (2304) are scaled down to fit, EXIF rotation applied.
+  `/v1/models` reports `"vision": true`. A build without a vision tower answers an image with a 400.
+  - Earlier releases ignored images: the template's image token went in with no picture behind it.
+- Where the tower lives (`--vision`): on a 16 GB Mac (GPU limit under 20 GiB) it loads when a prompt's image is first
+  read (0.1-0.3 s) and is freed afterwards, so text-only work keeps its memory; on 24 GB it stays loaded. Measured
+  on the base M4 16 GB with the 11.2 GB custom build at a 94K-token prompt: decode 15.1 tok/s loaded on demand,
+  12.2 with the tower kept resident.
+- `--vision-bits` (auto: 8 on 16 GB Macs, as stored on 24 GB): 8-bit linears (325 MiB instead of 607) keep the image
+  features at cosine 0.997-0.999 of the released bf16 tower, with the same answers.
+- Vision checks (base M4, 6/6 at bf16, 8-bit, and loaded on demand): reading an invoice (number and total), colors
+  and positions, counting, the open tickets in a 1280x800 screenshot, a follow-up question reusing the cached
+  image, and a different image at the same place (never served from the first image's cache). A 3840x2160 photo
+  (scaled to 2304 tokens) takes 4.5 s to encode, 17 s to read in all, and is described correctly.
+- Prompt reuse keys each image by its bytes and place: the image tokens are stored as per-image stand-in ids.
+  Copy drafting never drafts into them.
+
 ## 0.6.1 - 2026-11-23: faster prompt reading on 24 GB Macs
 
 - Bigger prompt steps when nothing is generating (`--prefill-chunk-alone`, auto). While other requests decode,

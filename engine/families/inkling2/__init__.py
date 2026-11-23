@@ -346,7 +346,148 @@ def load(model_path, options):
     if nrot:
         log.info("inkling2: %d expert projections in a Hadamard-rotated basis", nrot)
     shrink_weights(model, int(options.get("head_bits", 6)), int(options.get("attn_bits", 8)))
+    setup_vision(model, dict(options, model_path=model_path))
     return model, tok
+
+
+# -- images ---------------------------------------------------------------------
+# A build that ships the vision tower (config vision_config + vision_tower.* tensors) reads images: the processor cuts
+# an image into 40 px blocks, one image token each (a 1280x720 screenshot is 32x18 = 576 tokens); the tower (a 23-layer
+# ViT, ~300M parameters) turns them into embeddings that replace the image tokens' embeddings in the prompt.
+IMAGE_TOKEN = "<|unused_200054|>"
+BLOCK = 40
+
+
+# Where the tower lives: "resident" keeps it in memory; "lazy" loads it when a prompt's image is first read and
+# frees it once no prompt waits on an image (~0.3 s per load). Measured on a 16 GB M4 (11.2 GB build, 94K-token
+# prompt): a resident 8-bit tower left short-context speed and quality unchanged but cut decode at 94K from 15.1 to
+# 12.2 tok/s (the last GPU memory), so "auto" is lazy below a 20 GiB GPU limit.
+VISION = {"mode": None, "bits": 0, "path": None, "config": None, "hidden": 0}
+
+
+def vision_ready(model):
+    return VISION["mode"] in ("resident", "lazy")
+
+
+def _small_gpu():
+    return mx.device_info()["max_recommended_working_set_size"] < 20 * 2**30
+
+
+def _quantize_tower(tower, bits):
+    import mlx.nn as nn
+    if bits:
+        nn.quantize(tower, group_size=64, bits=bits,
+                    class_predicate=lambda _p, m: isinstance(m, nn.Linear) and m.weight.shape[-1] % 64 == 0)
+    mx.eval(tower.parameters())
+
+
+def setup_vision(model, options):
+    """vision: resident | lazy | off | auto (lazy below a 20 GiB GPU limit, else resident).
+    vision_bits 8/4 quantizes the tower's linear layers (group 64); 0 keeps them as stored (bf16, 607 MiB); -1 (auto)
+    picks 8 below a 20 GiB GPU limit. Measured on Inkling 2 Mini: 8-bit linears (325 MiB) keep the image features at
+    cosine 0.997-0.999 of bf16 with the same answers on the vision checks; 4-bit (174 MiB) drops to 0.95-0.97."""
+    import json
+
+    from mlx.utils import tree_flatten
+
+    if getattr(model, "vision_tower", None) is None:
+        return
+    mode = options.get("vision", "auto") or "auto"
+    if mode == "auto":
+        mode = "lazy" if _small_gpu() else "resident"
+    bits = int(options.get("vision_bits", -1))
+    if bits < 0:
+        bits = 8 if _small_gpu() else 0
+    path = options.get("model_path")
+    VISION.update(mode=mode, bits=bits, path=path, hidden=model.args.text.hidden_size if hasattr(model.args, "text")
+                  else model.args.hidden_size)
+    if path:
+        VISION["config"] = json.load(open(os.path.join(path, "config.json"))).get("vision_config")
+    if mode == "lazy" and not VISION["config"]:
+        mode = VISION["mode"] = "resident"           # no config to rebuild it from
+    if mode in ("off", "lazy"):
+        model.pop("vision_tower")
+        mx.clear_cache()
+        log.info("inkling2: vision tower %s", "off" if mode == "off" else
+                 f"loaded on demand ({bits}-bit linears)" if bits else "loaded on demand (as stored)")
+        return
+    _quantize_tower(model.vision_tower, bits)
+    size = sum(v.nbytes for _, v in tree_flatten(model.vision_tower.parameters()))
+    log.info("inkling2: vision tower resident, %.0f MiB (%s)", size / 2**20,
+             f"{bits}-bit linears" if bits else "as stored")
+
+
+def _tower(model):
+    """The vision tower, loading it from the build when it is not in memory (lazy mode)."""
+    import glob
+    import time
+
+    t = getattr(model, "vision_tower", None)
+    if t is not None:
+        return t
+    from omlx.patches.inkling2.vision import VisionArgs, VisionTower
+
+    t0 = time.time()
+    t = VisionTower(VisionArgs.from_dict(VISION["config"]), VISION["hidden"])
+    w = []
+    for f in sorted(glob.glob(os.path.join(VISION["path"], "*.safetensors"))):
+        if os.path.basename(f) == "mtp.safetensors":
+            continue
+        d = mx.load(f)
+        w += [(k[len("vision_tower."):], v) for k, v in d.items() if k.startswith("vision_tower.")]
+        del d
+    t.load_weights(w)
+    _quantize_tower(t, VISION["bits"])
+    model.vision_tower = t
+    log.info("inkling2: vision tower loaded in %.2f s", time.time() - t0)
+    return t
+
+
+def release_vision(model):
+    """Lazy mode: free the tower once no prompt waits on an image."""
+    if VISION["mode"] == "lazy" and getattr(model, "vision_tower", None) is not None:
+        model.pop("vision_tower")
+        mx.clear_cache()
+
+
+def image_token_id(model):
+    return int(getattr(model.args, "image_token_id", 200054))
+
+
+def prepare_image(data, max_tokens):
+    """Image bytes -> (pixel blocks [n, 40, 40, 3] float32, (1, rows, cols)). CPU only (any thread). An image over
+    max_tokens blocks is scaled down (aspect kept) to fit; EXIF rotation is applied first."""
+    import io
+    import math
+
+    from omlx.patches.inkling2.processing import Inkling2ImageProcessor
+    from PIL import Image, ImageOps
+
+    im = Image.open(io.BytesIO(data))
+    im = ImageOps.exif_transpose(im)
+    w, h = im.size
+    n = math.ceil(w / BLOCK) * math.ceil(h / BLOCK)
+    if max_tokens and n > max_tokens:
+        s = math.sqrt(max_tokens / n)
+        while True:
+            nw, nh = max(BLOCK, int(w * s)), max(BLOCK, int(h * s))
+            if math.ceil(nw / BLOCK) * math.ceil(nh / BLOCK) <= max_tokens:
+                break
+            s *= 0.97
+        im = im.resize((nw, nh), Image.LANCZOS)
+    out = Inkling2ImageProcessor().preprocess(im)
+    _t, rows, cols = (int(v) for v in out["image_grid_thw"][0])
+    return out["pixel_values"], (1, rows, cols)
+
+
+def encode_image(model, pixels, grid):
+    """Pixel blocks of one image -> its image-token embeddings [rows * cols, hidden] (engine thread)."""
+    return _tower(model)(mx.array(pixels), [list(grid)])
+
+
+def embed_tokens(model, ids):
+    """The prompt embeddings the text model starts from (normalized); image features replace these unnormalized."""
+    return model.model.embed_norm(model.model.embed(ids))
 
 
 ROTATION_FILE = "nuemac_rotation.json"
