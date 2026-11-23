@@ -6,8 +6,9 @@
 
 Nuemac gives the Mac you already own a new life as a private AI machine. It's a local LLM engine for
 memory-tight Apple Silicon: big open models with long contexts, on a 16 GB Mac mini, served as an
-OpenAI-compatible API on your own machine. Prompts, documents and answers never leave it, and there's no
-per-token bill.
+OpenAI-compatible API on your own machine. **Up to 4 users or agents at once** (continuous batching: 37 tok/s total
+on a 16 GB M4, 61.5 on a 24 GB M4 Pro), each conversation's cache kept so the next turn reads only its new tokens (0.5 s to the first token
+on the M4 Pro with a 10.9K-token agent prompt). Prompts, documents and answers never leave it, and there's no per-token bill.
 
 Under the hood it runs on [MLX](https://github.com/ml-explore/mlx), with its own KV-cache layouts and Metal
 kernels for each model family. One command installs it and a model, and one more benchmarks it on your Mac.
@@ -21,6 +22,27 @@ https://github.com/TechGuardCoders/nuemac/blob/main/AGENTS.md"*. The steps are n
 one `sudo` line it hands back to you when the Mac needs it.
 
 Landing page: <https://techguardcoders.github.io/nuemac/>
+
+## Made for the 16 GB M4
+
+The best way to run Inkling 2 Mini on a 16 GB M4 Mac: the default build is [our own quantization](https://huggingface.co/Techguardai/Inkling-2-Mini-TG-MLX), the
+most accurate MLX build we measured that fits in 16 GB (94.2% next-token match, against 91.1% for the next best),
+at 27.1 tok/s with a 96K-token context and images on a base Mac mini, the fastest way we found to run the model.
+(Some llama.cpp GGUF builds score closer to the full model, but run at 17 tok/s and take 42 minutes to read a long
+prompt.)
+
+| Mac | Memory | Status |
+| --- | --- | --- |
+| Mac mini (M4, 2024), 10-core GPU | 16 GB | **measured**: every 16 GB number in this README |
+| MacBook Air 13" and 15" (M4, 2025) | 16 GB | supported; fanless, so long generations can slow a little as it warms |
+| MacBook Pro 14" (M4, 2024) | 16 GB | supported; expect Mac mini speeds |
+| iMac 24" (M4, 2024) | 16 GB | supported |
+| Mac mini M4 Pro, MacBook Pro M4 Pro/Max, any M4 Mac with 24 GB+ | 24 GB or more | the 256K build: 42.5 tok/s measured on a 24 GB M4 Pro |
+| M1, M2, M3 and newer Macs with 16 GB | 16 GB | should run the same build; not measured (`nuemac bench`) |
+
+Every M4 reads memory at 120 GB/s and decode follows memory bandwidth, so 8-core-GPU models should decode close to
+the Mac mini; prompt reading scales with GPU cores. All of them need the GPU memory limit raised to 14.5 GB (the
+installer asks) and big apps closed while the model runs. iPads with M4 run iPadOS, which Nuemac does not support.
 
 ## Why Nuemac is different
 

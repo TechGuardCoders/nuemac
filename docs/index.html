@@ -119,7 +119,8 @@ footer img{height:16px;opacity:.8}
     <nav>
       <a href="https://github.com/TechGuardCoders" aria-label="Tech Guard"><img src="assets/techguard-wordmark.png" alt="Tech Guard"></a>
       <div class="links">
-        <a href="#why">Why it's different</a>
+        <a href="#m4">16 GB M4 Macs</a>
+        <a href="#why" class="hide-sm">Why it's different</a>
         <a href="#numbers" class="hide-sm">Numbers</a>
         <a href="#concurrency" class="hide-sm">Several users</a>
         <a href="#agents" class="hide-md">Agents &amp; images</a>
@@ -132,7 +133,7 @@ footer img{height:16px;opacity:.8}
       <div>
         <div class="eyebrow">Nuemac · private inference at the edge</div>
         <h1>Bring your Mac to life.</h1>
-        <p class="lede">Nuemac turns the Mac you already own into a private AI machine: big open models with long contexts on a 16 GB Mac mini, served on your own desk as an OpenAI-compatible API. Nothing leaves the machine. First supported model: Thinking Machines' Inkling 2 Mini, with a 96K-token context.</p>
+        <p class="lede">Nuemac turns the Mac you already own into a private AI machine: big open models with long contexts on a 16 GB Mac mini, served on your own desk as an OpenAI-compatible API to <b>up to 4 users or agents at once</b>. Nothing leaves the machine. First supported model: Thinking Machines' Inkling 2 Mini, with a 96K-token context and images.</p>
         <div class="install">
           <code id="cmd"><span class="p">$ </span>curl -fsSL https://raw.githubusercontent.com/TechGuardCoders/nuemac/main/install.sh | bash</code>
           <button class="copy" id="copy" type="button">Copy</button>
@@ -144,18 +145,48 @@ footer img{height:16px;opacity:.8}
         <div class="k">Inkling 2 Mini decode, one user · base Mac mini M4 16 GB</div>
         <div class="kv">
           <div><b>96K</b><span>context, 8-bit global KV cache</span></div>
-          <div><b>12/12</b><span>known-answer check</span></div>
+          <div><b>4 at once</b><span>users or agents, 37 tok/s total</span></div>
           <div><b>94%</b><span>next-token match to the full model</span></div>
           <div><b>$0</b><span>per token, runs on your Mac</span></div>
         </div>
         <div class="sub" style="margin-top:18px">On a 24 GB Mac mini M4 Pro: <b>42.5 tok/s</b> with a <b>256K</b> context, prompts read at <b>337-349 tok/s</b>. The installer picks the build for your Mac's memory.</div>
-        <div class="sub" style="margin-top:8px">Up to 4 requests at once: <b>36.3 tok/s</b> total on the 16 GB mini, <b>61.5 tok/s</b> on the M4 Pro. <a href="#concurrency">How</a></div>
+        <div class="sub" style="margin-top:8px">Up to 4 requests at once: <b>37.0 tok/s</b> total on the 16 GB mini, <b>61.5 tok/s</b> on the M4 Pro, with each conversation's cache kept, so an agent's next turn starts in 0.5 s on the M4 Pro. <a href="#concurrency">How</a></div>
         <div class="sub" style="margin-top:8px">Rewriting a file: <b>69 tok/s</b> on the M4 Pro, drafted from the file itself.</div>
         <div class="sub" style="margin-top:8px"><b>Reads images</b> (0.7.0), and an agent's next turn starts in <b>0.5 s</b>: the conversation stays cached. <a href="#agents">How</a></div>
       </div>
     </div>
   </div>
 </header>
+
+<section id="m4">
+  <div class="wrap">
+    <div class="eyebrow">Made for the 16 GB M4</div>
+    <h2>The best way to run Inkling 2 Mini on a 16 GB M4 Mac, for up to 4 users at once</h2>
+    <p class="intro">Every M4 Mac that ships with 16 GB of unified memory can run Thinking Machines' Inkling 2 Mini as a private, local AI with a 96K-token context and images, through one command. Nuemac's default build for these Macs is <a href="https://huggingface.co/Techguardai/Inkling-2-Mini-TG-MLX">our own quantization</a>: it is the most accurate MLX build we measured that fits in 16 GB, and on Nuemac it is the fastest way we found to run the model. (Some llama.cpp GGUF builds score closer to the full model, but run at 17 tok/s and take 42 minutes to read a long prompt.)</p>
+    <div class="cmp-wrap">
+      <table class="cmp">
+        <thead><tr><th>Base 16 GB M4 Mac mini</th><th>Next best build that fits</th><th>Next best engine</th><th class="us">Nuemac + Tech Guard quant</th></tr></thead>
+        <tbody>
+          <tr><td>Match to the full model (next token)</td><td>91.1% (oQ2.5e, 10.9 GB)</td><td>&mdash;</td><td class="us">94.2%</td></tr>
+          <tr><td>Decode, one user</td><td>26.1 tok/s (oQ2.5e on Nuemac)</td><td>17.3 tok/s (llama.cpp)</td><td class="us">27.1 tok/s</td></tr>
+          <tr><td>A 94K-token prompt, first word after</td><td>&mdash;</td><td>42.6 min (llama.cpp)</td><td class="us">11.9 min</td></tr>
+          <tr><td>4 users at once</td><td>36.3 tok/s total</td><td>one at a time (mlx-serve)</td><td class="us">37.0 tok/s total</td></tr>
+          <tr><td>Images</td><td>yes (Nuemac 0.7+)</td><td>&mdash;</td><td class="us">yes, no memory cost to text</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3 style="margin:34px 0 14px;font-size:20px;color:#fff">Macs it runs on</h3>
+    <div class="grid3">
+      <div class="card"><div class="n">MEASURED</div><h3>Mac mini (M4, 2024)</h3><p>10-core CPU, 10-core GPU, 16 GB. Every number on this page was measured here. Quiet, always on: the natural private AI server for a home or office.</p></div>
+      <div class="card"><div class="n">M4 · 16 GB</div><h3>MacBook Air 13" and 15" (M4, 2025)</h3><p>16 GB is the base memory. Fanless: long generations can slow a little as it warms. Plug in for long sessions.</p></div>
+      <div class="card"><div class="n">M4 · 16 GB</div><h3>MacBook Pro 14" (M4, 2024)</h3><p>10-core CPU, 10-core GPU, 16 GB base, with a fan for sustained work. Expect Mac mini speeds.</p></div>
+      <div class="card"><div class="n">M4 · 16 GB</div><h3>iMac 24" (M4, 2024)</h3><p>16 GB base on every configuration, 8- or 10-core GPU.</p></div>
+      <div class="card"><div class="n">24 GB OR MORE</div><h3>M4 Pro and M4 Max Macs</h3><p>Mac mini M4 Pro, MacBook Pro M4 Pro/Max, and any M4 Mac ordered with 24 GB or more get the 256K-context build: 42.5 tok/s on a 24 GB M4 Pro.</p></div>
+      <div class="card"><div class="n">16 GB, OTHER CHIPS</div><h3>M1, M2, M3 and newer with 16 GB</h3><p>Should install and run the same build; we have not measured them. Run <code>nuemac bench</code> for your own numbers.</p></div>
+    </div>
+    <p class="note">Every M4 reads memory at the same 120 GB/s, and decode speed follows memory, so 8-core-GPU models should decode close to the Mac mini; prompt reading scales with GPU cores and will be slower on them. All of these need the GPU memory limit raised to 14.5 GB (the installer does it with your OK) and want big apps closed while the model runs. iPads with M4 run iPadOS, which Nuemac does not support.</p>
+  </div>
+</section>
 
 <section id="why">
   <div class="wrap">
