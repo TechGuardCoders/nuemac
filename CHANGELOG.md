@@ -2,6 +2,18 @@
 
 Speeds are from `nuemac bench`: a base Mac mini M4 (10-core GPU, 16 GB) at 96K context unless a line says otherwise.
 
+## 0.7.1 - 2026-11-23: a better 16 GB model, agent installs
+
+- New 16 GB default model `inkling-2-mini-tg`: [Techguardai/Inkling-2-Mini-TG-MLX](https://huggingface.co/Techguardai/Inkling-2-Mini-TG-MLX), Tech Guard's 11.2 GB
+  MLX quant of Inkling 2 Mini with per-tensor bits chosen from measured sensitivity (3-bit experts, 2-bit where it
+  measured safe, 6/8-bit attention, 4-bit embedding, 6-bit head) plus the released vision tower. Against the
+  released model: 94.2% top-1 agreement, KL 0.041 (oQ2.5e: 91.1%, 0.099), for 0.3 GB more. Base M4 16 GB: 27.1
+  tok/s prose, 26.2 code, 37.0 total at 4 requests, 44.7 rewriting, a 94K-token prompt in 712 s (needle found),
+  quality check 12/12, vision checks 6/6. Existing installs: `nuemac use inkling-2-mini-tg`.
+- `install.sh --yes` answers every question, for scripts and AI agents. Without a terminal, sudo is tried
+  non-interactively (`sudo -n`); if it can't run, the installer prints `NEEDS A PERSON` and the exact command.
+- [AGENTS.md](AGENTS.md): the install, verify and hand-over steps for an AI agent.
+
 ## 0.7.0 - 2026-11-23: images
 
 - Inkling 2 Mini reads images. Send OpenAI-style `image_url` parts (base64 `data:` URLs or http(s) links) in user or

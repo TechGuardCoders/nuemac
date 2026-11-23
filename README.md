@@ -2,7 +2,7 @@
 
 **Private inference at the edge.**
 
-<p align="center"><img src="docs/assets/infographic.png" alt="Nuemac: private inference at the edge. Inkling 2 Mini at 25.9 tok/s with a 96K context on a base 16 GB M4 Mac mini, up to 4 requests at once" width="820"></p>
+<p align="center"><img src="docs/assets/infographic.png" alt="Nuemac: private inference at the edge. Inkling 2 Mini at 27.1 tok/s with a 96K context and images on a base 16 GB M4 Mac mini, 94% match to the full model, up to 4 requests at once" width="820"></p>
 
 Nuemac gives the Mac you already own a new life as a private AI machine. It's a local LLM engine for
 memory-tight Apple Silicon: big open models with long contexts, on a 16 GB Mac mini, served as an
@@ -15,6 +15,10 @@ kernels for each model family. One command installs it and a model, and one more
 ```bash
 curl -fsSL https://raw.githubusercontent.com/TechGuardCoders/nuemac/main/install.sh | bash
 ```
+
+Installing with an AI agent? Tell it: *"Install Nuemac by following
+https://github.com/TechGuardCoders/nuemac/blob/main/AGENTS.md"*. The steps are non-interactive (`--yes`), except
+one `sudo` line it hands back to you when the Mac needs it.
 
 Landing page: <https://techguardcoders.github.io/nuemac/>
 
@@ -101,7 +105,8 @@ telemetry and no per-token bill.
 
 | Model | Machine checked | Speed | Recipe |
 | --- | --- | --- | --- |
-| **Inkling 2 Mini** (Thinking Machines), MLX oQ2.5e, 96K context, text + images: `inkling-2-mini` | Mac mini M4, 16 GB | **25.9 tok/s** decode, 191 tok/s prefill, 20.7 tok/s at 32K; 36.3 tok/s total at 4 requests; 43.5 tok/s rewriting a file | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
+| **Inkling 2 Mini**, [Tech Guard MLX quant](https://huggingface.co/Techguardai/Inkling-2-Mini-TG-MLX) (11.2 GB, 94.2% match to the full model), 96K context, text + images: `inkling-2-mini-tg` (16 GB default since 0.7.1) | Mac mini M4, 16 GB | **27.1 tok/s** decode (26.2 on code); 37.0 tok/s total at 4 requests; 44.7 tok/s rewriting a file; a 94K-token prompt in 11.9 min | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
+| **Inkling 2 Mini**, mlx-community oQ2.5e (91.1% match), 96K context, text + images: `inkling-2-mini` (16 GB default until 0.7.1) | Mac mini M4, 16 GB | **25.9 tok/s** decode, 191 tok/s prefill, 20.7 tok/s at 32K; 36.3 tok/s total at 4 requests; 43.5 tok/s rewriting a file | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
 | **Inkling 2 Mini**, MLX oQ3e, 256K context, text + images: `inkling-2-mini-oq3e` | Mac mini M4 Pro, 24 GB | **42.5 tok/s** decode, 337-349 tok/s prefill (0.6.1), 34.8 tok/s at 24K, a 120K prompt in 8.2 min; 61.5 tok/s total at 4 requests; 69.4 tok/s rewriting a file | [inkling-2-mini, 24 GB](docs/recipes/inkling-2-mini.md#24-gb-m4-pro-256k-context) |
 
 The installer picks the build for your Mac's memory: the 16 GB build below 24 GB, the 256K build at 24 GB or more.
@@ -172,15 +177,16 @@ Agreement with the released model (top-1 next token and KL against its top-20 lo
 
 | build | size | top-1 agreement | KL | perplexity |
 | --- | --- | --- | --- | --- |
-| mlx-community oQ2.5e (the 16 GB download) | 10.9 GB | 91.1% | 0.099 | +10.7% |
-| Tech Guard custom build (sensitivity-allocated 2-4 bit experts) | 11.2 GB | **94.2%** | 0.041 | +4.5% |
+| mlx-community oQ2.5e (the 16 GB download until 0.7.1) | 10.9 GB | 91.1% | 0.099 | +10.7% |
+| [Tech Guard quant](https://huggingface.co/Techguardai/Inkling-2-Mini-TG-MLX) (sensitivity-allocated 2- and 3-bit experts; the 16 GB download since 0.7.1) | 11.2 GB | **94.2%** | 0.041 | +4.5% |
 | mlx-community oQ3e (the 24 GB download) | 12.3 GB | 94.4% | 0.040 | +4.3% |
 | mlx-community oQ4e | 16 GB | 95.6% | 0.024 | +2.6% |
 
 The custom build spends bits where measured sensitivity says the model is fragile and fewer where it isn't, and
 reaches oQ3e's accuracy at a size that runs a 96K context on 16 GB (27.1 tok/s decode, 37.0 total at 4 requests,
-44.7 rewriting, a 94K-token prompt in 712 s with the needle found). It is not published yet; serve your own build
-with `MODEL_PATH` (below).
+44.7 rewriting, a 94K-token prompt in 712 s with the needle found). It is published as
+[Techguardai/Inkling-2-Mini-TG-MLX](https://huggingface.co/Techguardai/Inkling-2-Mini-TG-MLX) (Apache-2.0) and is the
+default on 16 GB Macs from 0.7.1; on an existing install, `nuemac use inkling-2-mini-tg`.
 
 ## Requirements
 

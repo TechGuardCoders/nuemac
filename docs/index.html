@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nuemac: private inference at the edge</title>
-<meta name="description" content="Nuemac: private inference at the edge. A local LLM engine that brings 16 GB Macs to life. Inkling 2 Mini at 25.9 tok/s with a 96K context on a base 16 GB M4 Mac mini, up to 4 requests at once, now reading images.">
+<meta name="description" content="Nuemac: private inference at the edge. A local LLM engine that brings 16 GB Macs to life. Inkling 2 Mini at 27.1 tok/s with a 96K context and images on a base 16 GB M4 Mac mini, 94% match to the full model, up to 4 requests at once.">
 <meta property="og:title" content="Nuemac: private inference at the edge">
-<meta property="og:description" content="Inkling 2 Mini at 25.9 tok/s with a 96K context on a base 16 GB M4 Mac mini. Up to 4 requests at once. Reads images. One command. MLX with custom Metal kernels.">
+<meta property="og:description" content="Inkling 2 Mini at 27.1 tok/s with a 96K context on a base 16 GB M4 Mac mini, 94% match to the full model. Up to 4 requests at once. Reads images. One command. MLX with custom Metal kernels.">
 <meta property="og:image" content="https://techguardcoders.github.io/nuemac/assets/infographic.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="assets/tg-monogram.png">
@@ -137,15 +137,15 @@ footer img{height:16px;opacity:.8}
           <code id="cmd"><span class="p">$ </span>curl -fsSL https://raw.githubusercontent.com/TechGuardCoders/nuemac/main/install.sh | bash</code>
           <button class="copy" id="copy" type="button">Copy</button>
         </div>
-        <div class="sub">Installs oMLX (Homebrew) and Nuemac, downloads ~11 GB and checks every file's SHA-256, asks before raising the GPU memory limit.</div>
+        <div class="sub">Installs oMLX (Homebrew) and Nuemac, downloads ~12 GB and checks every file's SHA-256, asks before raising the GPU memory limit. Installing with an AI agent? Point it at <a href="https://github.com/TechGuardCoders/nuemac/blob/main/AGENTS.md">AGENTS.md</a>.</div>
       </div>
       <div class="stat-card">
-        <div class="big">25.9<small>tok/s</small></div>
+        <div class="big">27.1<small>tok/s</small></div>
         <div class="k">Inkling 2 Mini decode, one user · base Mac mini M4 16 GB</div>
         <div class="kv">
           <div><b>96K</b><span>context, 8-bit global KV cache</span></div>
           <div><b>12/12</b><span>known-answer check</span></div>
-          <div><b>191</b><span>tok/s prompt reading, 2.8× llama.cpp</span></div>
+          <div><b>94%</b><span>next-token match to the full model</span></div>
           <div><b>$0</b><span>per token, runs on your Mac</span></div>
         </div>
         <div class="sub" style="margin-top:18px">On a 24 GB Mac mini M4 Pro: <b>42.5 tok/s</b> with a <b>256K</b> context, prompts read at <b>337-349 tok/s</b>. The installer picks the build for your Mac's memory.</div>
@@ -271,14 +271,14 @@ footer img{height:16px;opacity:.8}
       <table class="cmp">
         <thead><tr><th>Build</th><th>Size</th><th>Top-1 agreement</th><th>KL</th></tr></thead>
         <tbody>
-          <tr><td>mlx-community oQ2.5e (16 GB download)</td><td>10.9 GB</td><td>91.1%</td><td>0.099</td></tr>
-          <tr><td class="us">Tech Guard custom build (sensitivity-allocated experts)</td><td class="us">11.2 GB</td><td class="us">94.2%</td><td class="us">0.041</td></tr>
+          <tr><td>mlx-community oQ2.5e (16 GB download until 0.7.1)</td><td>10.9 GB</td><td>91.1%</td><td>0.099</td></tr>
+          <tr><td class="us"><a href="https://huggingface.co/Techguardai/Inkling-2-Mini-TG-MLX">Tech Guard quant</a> (16 GB download since 0.7.1)</td><td class="us">11.2 GB</td><td class="us">94.2%</td><td class="us">0.041</td></tr>
           <tr><td>mlx-community oQ3e (24 GB download)</td><td>12.3 GB</td><td>94.4%</td><td>0.040</td></tr>
           <tr><td>mlx-community oQ4e</td><td>16 GB</td><td>95.6%</td><td>0.024</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="note">The custom build reaches oQ3e's accuracy at a size that runs a 96K context on a 16 GB M4: 27.1 tok/s decode, 37.0 total at 4 requests, 44.7 rewriting, a 94K-token prompt in 712 s with the needle found, images included. It is not published yet; <code style="font:13px JetBrains Mono,monospace">MODEL_PATH</code> serves your own build.</p>
+    <p class="note">The custom build reaches oQ3e's accuracy at a size that runs a 96K context on a 16 GB M4: 27.1 tok/s decode, 37.0 total at 4 requests, 44.7 rewriting, a 94K-token prompt in 712 s with the needle found, images included. Published as <a href="https://huggingface.co/Techguardai/Inkling-2-Mini-TG-MLX">Techguardai/Inkling-2-Mini-TG-MLX</a> (Apache-2.0); the installer picks it on 16 GB Macs.</p>
   </div>
 </section>
 

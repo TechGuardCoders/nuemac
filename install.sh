@@ -5,8 +5,10 @@
 #   curl -fsSL https://raw.githubusercontent.com/TechGuardCoders/nuemac/main/install.sh | bash
 #
 # Options:
-#   --model NAME        model to install (default: inkling-2-mini on 16 GB Macs, inkling-2-mini-oq3e on 24 GB+;
+#   --model NAME        model to install (default: inkling-2-mini-tg on 16 GB Macs, inkling-2-mini-oq3e on 24 GB+;
 #                       list: docs/supported-models.md)
+#   --yes               answer yes to every question (for scripts and AI agents; see AGENTS.md). The GPU-limit
+#                       step still needs sudo: without a terminal or cached sudo it prints the command to run.
 #   --prefix DIR        install here (default ~/.nuemac)
 #   --port N            server port (default 8080, loopback only)
 #   --no-start          install only, don't start the server
@@ -18,7 +20,7 @@ set -euo pipefail
 REPO="TechGuardCoders/nuemac"
 BRANCH="${NUEMAC_BRANCH:-main}"
 PREFIX="${NUEMAC_PREFIX:-$HOME/.nuemac}"
-MODEL=""; PORT=""; START=1; WIRED=1; ADDPATH=1; DRY=0
+MODEL=""; PORT=""; START=1; WIRED=1; ADDPATH=1; DRY=0; YES=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --model|--models) MODEL="$2"; shift ;;
@@ -28,14 +30,16 @@ while [ $# -gt 0 ]; do
     --no-wired-limit) WIRED=0 ;;
     --no-path) ADDPATH=0 ;;
     --dry-run) DRY=1 ;;
-    -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --yes|-y) YES=1 ;;
+    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac; shift
 done
 
 b() { printf '\033[1m%s\033[0m\n' "$*"; }
 die() { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
-ask() { # question -> 0 for yes; needs a terminal (works under curl | bash via /dev/tty)
+ask() { # question -> 0 for yes; needs a terminal (works under curl | bash via /dev/tty), or --yes
+  if [ "$YES" = 1 ]; then echo "$1 yes (--yes)"; return 0; fi
   local a=""; [ -r /dev/tty ] || return 1
   printf '%s [y/N] ' "$1" > /dev/tty; read -r a < /dev/tty || return 1
   case "$a" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
@@ -55,7 +59,7 @@ MEM_MB=$(( $(sysctl -n hw.memsize) / 1048576 ))
 echo "Mac        $(sysctl -n machdep.cpu.brand_string), $((MEM_MB / 1024)) GB, macOS $(sw_vers -productVersion)"
 # Default model by memory: the 16 GB build (96K) or, with 24 GB or more, the 24 GB build (256K).
 if [ -z "$MODEL" ]; then
-  if [ "$MEM_MB" -ge 23000 ]; then MODEL="inkling-2-mini-oq3e"; else MODEL="inkling-2-mini"; fi
+  if [ "$MEM_MB" -ge 23000 ]; then MODEL="inkling-2-mini-oq3e"; else MODEL="inkling-2-mini-tg"; fi
 fi
 BREW="$(command -v brew || { [ -x /opt/homebrew/bin/brew ] && echo /opt/homebrew/bin/brew; } || true)"
 if [ -z "$BREW" ] && ! omlx_python >/dev/null; then
@@ -172,12 +176,19 @@ if [ "$WIRED" = 1 ] && [ "$EFF" -lt "$WANT" ]; then
   b "GPU memory limit"
   echo "  The GPU may use only ~$EFF MB now; $MODEL needs $WANT MB."
   echo "  Raising it needs your password (sudo). Close other big apps while the model runs."
+  # sudo reads the password from the terminal; with none (an agent's shell) only a cached sudo works (sudo -n)
+  if [ -r /dev/tty ] && [ -w /dev/tty ]; then SUDO="sudo"; else SUDO="sudo -n"; fi
   if ask "  Raise it to $WANT MB now?"; then
-    sudo sysctl iogpu.wired_limit_mb="$WANT" < /dev/tty
-    if ask "  Keep it after reboot (installs a small boot job in /Library/LaunchDaemons)?"; then
-      sed "s/iogpu.wired_limit_mb=[0-9]*/iogpu.wired_limit_mb=$WANT/" "$PREFIX/nuemac/support/com.nuemac.wiredlimit.plist" |
-        sudo tee /Library/LaunchDaemons/com.nuemac.wiredlimit.plist > /dev/null
-      sudo launchctl bootstrap system /Library/LaunchDaemons/com.nuemac.wiredlimit.plist 2>/dev/null || true
+    if $SUDO sysctl iogpu.wired_limit_mb="$WANT" < /dev/tty 2>/dev/null || $SUDO sysctl iogpu.wired_limit_mb="$WANT"; then
+      if ask "  Keep it after reboot (installs a small boot job in /Library/LaunchDaemons)?"; then
+        sed "s/iogpu.wired_limit_mb=[0-9]*/iogpu.wired_limit_mb=$WANT/" "$PREFIX/nuemac/support/com.nuemac.wiredlimit.plist" |
+          $SUDO tee /Library/LaunchDaemons/com.nuemac.wiredlimit.plist > /dev/null
+        $SUDO launchctl bootstrap system /Library/LaunchDaemons/com.nuemac.wiredlimit.plist 2>/dev/null || true
+      fi
+    else
+      echo "  NEEDS A PERSON: sudo could not ask for a password here. In a terminal, run:"
+      echo "    sudo sysctl iogpu.wired_limit_mb=$WANT"
+      echo "  then: nuemac restart"
     fi
   else
     echo "  Skipped. Before starting, run:  sudo sysctl iogpu.wired_limit_mb=$WANT"
