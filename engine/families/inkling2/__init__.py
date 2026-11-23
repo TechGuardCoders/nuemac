@@ -317,7 +317,8 @@ def shrink_weights(model, head_bits, attn_bits=8):
             layer.loop_down = layer.loop_down.astype(mx.bfloat16)
             layer.loop_gain_forget = layer.loop_gain_forget.astype(mx.bfloat16)
     head = model.lm_head
-    if head_bits and head_bits != getattr(head, "bits", head_bits):
+    # only ever lower the head's width: a build that already stores it at 4 or 6 bits keeps it as stored
+    if head_bits and head_bits < getattr(head, "bits", 16):
         model.lm_head = _requant(head, head_bits)
     if attn_bits and attn_bits != 8 or os.environ.get("NUEMAC_REQUANT_ATTN8"):
         for layer in model.model.layers:
@@ -341,8 +342,64 @@ def load(model_path, options):
     install_bf16_loop_patch()
     model, tok = load_text_model(model_path)
     mx.eval(model.parameters())
+    nrot = install_rotation(model, model_path)
+    if nrot:
+        log.info("inkling2: %d expert projections in a Hadamard-rotated basis", nrot)
     shrink_weights(model, int(options.get("head_bits", 6)), int(options.get("attn_bits", 8)))
     return model, tok
+
+
+ROTATION_FILE = "nuemac_rotation.json"
+
+
+def rotation_signs(dim, seed):
+    import numpy as np
+    return mx.array(np.random.default_rng(seed).choice([-1.0, 1.0], size=dim).astype("float32"))
+
+
+def rotate(x, signs, block):
+    """Signed blockwise Walsh-Hadamard of the last axis, orthonormal: W x == (rotate(W rows)) (rotate(x))."""
+    import math
+    shp = x.shape
+    y = (x.astype(mx.float32) * signs).reshape(*shp[:-1], shp[-1] // block, block)
+    return mx.hadamard_transform(y, scale=1.0 / math.sqrt(block)).reshape(shp).astype(x.dtype)
+
+
+def install_rotation(model, model_path):
+    """Experts quantized in a Hadamard-rotated basis (the build lists them in nuemac_rotation.json: block size and
+    sign seed per projection) get their input rotated the same way at run time, on every path (compiled decode,
+    batches, draft checks, prefill). Rotation spreads a weight row's outliers across its block, so a 2-bit grid fits
+    it far better (the idea behind QuIP#, QuaRot and Bonsai's rotated basis). Returns how many projections."""
+    path = os.path.join(model_path, ROTATION_FILE)
+    if not os.path.exists(path):
+        return 0
+    import json
+
+    from omlx.patches.inkling2 import model as ink
+
+    if not getattr(ink.ExpertProj, "_nuemac_rot", False):
+        orig = ink.ExpertProj.__call__
+
+        def call(self, x, idx, sorted_indices):
+            rot = self.__dict__.get("_rot")
+            if rot is not None:
+                x = rotate(x, *rot)
+            return orig(self, x, idx, sorted_indices)
+
+        ink.ExpertProj.__call__ = call
+        ink.ExpertProj._nuemac_rot = True
+    spec = json.load(open(path))
+    n = 0
+    for mpath, r in spec.items():
+        m = model
+        for part in mpath.split("."):
+            m = m[int(part)] if part.isdigit() else getattr(m, part)
+        din = m.scales.shape[-1] * m.group_size
+        signs = rotation_signs(din, int(r["seed"]))
+        mx.eval(signs)
+        m.__dict__["_rot"] = (signs, int(r["block"]))
+        n += 1
+    return n
 
 
 def make_decoder(model, options):
@@ -406,6 +463,14 @@ def batch_cache(caches):
             for v in range(len(caches[0]))]
 
 
+HINTS = {"prefill_chunk": 256}
+
+
+def set_hint(name, value):
+    """Engine settings the cache estimate depends on (the largest prefill chunk sizes the window caches)."""
+    HINTS[name] = value
+
+
 def cache_bytes(model, max_len):
     """Estimated bytes one sequence's caches take: 8-bit global K/V for max_len keys, the window caches."""
     args = model.args.text if hasattr(model.args, "text") else model.args
@@ -413,7 +478,7 @@ def cache_bytes(model, max_len):
     n_global = sum(1 for idx, _p in sched if not args.is_sliding(idx))
     n_window = len(sched) - n_global
     per_key = 2 * args.num_key_value_heads * (args.head_dim + 2 * 2 * (args.head_dim // 64))   # codes + scales/biases
-    window_keys = args.sliding_window_size + 256 + 256                                          # keep + chunk + slack
+    window_keys = args.sliding_window_size + HINTS["prefill_chunk"] + 256                       # keep + chunk + slack
     win = 2 * args.swa_num_key_value_heads * args.swa_head_dim * 2 * window_keys
     return n_global * per_key * max_len + n_window * win
 

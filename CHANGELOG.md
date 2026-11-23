@@ -2,6 +2,24 @@
 
 Speeds are from `nuemac bench`: a base Mac mini M4 (10-core GPU, 16 GB) at 96K context unless a line says otherwise.
 
+## 0.6.1 - 2026-11-23: faster prompt reading on 24 GB Macs
+
+- Bigger prompt steps when nothing is generating (`--prefill-chunk-alone`, auto). While other requests decode,
+  prompts are still read 256 tokens at a time so those requests wait at most about one step. With nothing
+  decoding there is no one to wait, so a Mac with a GPU limit of 20 GiB or more reads 1024 tokens per step.
+  M4 Pro 24 GB (oQ3e): 320 -> 348 tok/s at 1.6K tokens, 329 -> 349 at 6K, 318 -> 337 at 18K, a 120K-token prompt
+  in 8.2 min (243 tok/s, needle found); same accuracy (top-1 agreement with 0.6.0 99%); peak GPU memory +1.1-1.7
+  GiB. On the 16 GB M4 it was no faster and a 94K prompt ran out of GPU memory, so it keeps 256 there.
+- `MLX_MAX_OPS_PER_BUFFER` defaults to 200 (MLX ends a Metal command buffer after 40 ops on M4 chips): M4 Pro
+  decode +2%, 4 requests at once +5%. An explicit environment value still wins.
+- The output head is only ever lowered to `--head-bits`, never raised: a build that stores it at 4 or 6 bits is
+  served as stored.
+- Builds whose experts were quantized in a Hadamard-rotated basis (listed in `nuemac_rotation.json`) get their
+  inputs rotated to match.
+- `MODEL_PATH` in `~/.nuemac/settings` serves your own build of the active model; the installer now keeps other
+  settings when it rewrites `PORT`.
+- The log shows each prompt's read time and peak GPU memory.
+
 ## 0.6.0 - 2026-11-22: copy drafting, oMLX 0.8.3
 
 - Copy drafting: while one request decodes alone, a reply that repeats its context (a rewritten file, an edit,

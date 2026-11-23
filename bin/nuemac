@@ -34,13 +34,20 @@ wait_ready() {
 omlx_python() { for p in /opt/homebrew/opt/omlx/libexec/bin/python /usr/local/opt/omlx/libexec/bin/python; do
   [ -x "$p" ] && { echo "$p"; return 0; }; done; return 1; }
 installed() { omlx_python >/dev/null && [ -f "$PREFIX/models/$MODEL_DIR/.verified" ]; }
+# MODEL_PATH in $PREFIX/settings serves your own build of the active model (same family and layout, e.g. a
+# re-quantization) from that folder instead of the downloaded weights; the model's other settings still apply.
+model_path() { echo "${MODEL_PATH:-$PREFIX/models/$MODEL_DIR}"; }
 
 cmd_serve() {
   load_model
   local py; py="$(omlx_python)" || die "oMLX missing: brew tap jundot/omlx https://github.com/jundot/omlx && brew install jundot/omlx/omlx (or re-run the installer)"
-  installed || die "model $MODEL_KEY is not installed; run: nuemac use $MODEL_KEY"
+  if [ -n "${MODEL_PATH:-}" ]; then
+    [ -f "$MODEL_PATH/config.json" ] || die "MODEL_PATH $MODEL_PATH has no config.json"
+  else
+    installed || die "model $MODEL_KEY is not installed; run: nuemac use $MODEL_KEY"
+  fi
   # shellcheck disable=SC2086
-  exec "$py" -I "$SRC/engine/server.py" --model "$PREFIX/models/$MODEL_DIR" --alias "$MODEL_ID" \
+  exec "$py" -I "$SRC/engine/server.py" --model "$(model_path)" --alias "$MODEL_ID" \
     --host "$HOST" --port "$PORT" --ctx "${CTX:-98304}" --expect-omlx "${OMLX_VERSION:-}" \
     ${SERVER_ARGS:-} ${EXTRA_ARGS:-}
 }
@@ -101,6 +108,7 @@ cmd_status() {
   local a; a=$(active); load_model "$a"
   echo "prefix    $PREFIX"
   echo "active    $a  ($MODEL_LABEL)"
+  [ -n "${MODEL_PATH:-}" ] && echo "weights   $MODEL_PATH  (MODEL_PATH in $PREFIX/settings)"
   echo "engine    nuemac $(grep -m1 '^__version__' "$SRC/engine/server.py" | cut -d'"' -f2), oMLX $("$(omlx_python 2>/dev/null || echo false)" -I -c 'import importlib.metadata as m; print(m.version("omlx"))' 2>/dev/null || echo missing)"
   echo "gpu limit $(sysctl -n iogpu.wired_limit_mb 2>/dev/null) MB (0 = macOS default)"
   if healthy; then

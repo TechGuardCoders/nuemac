@@ -107,7 +107,10 @@ if [ "$(cd "$SRC_IN" && pwd -P)" != "$(cd "$PREFIX" && pwd -P)/nuemac" ]; then
   rm -rf "$PREFIX/nuemac"; mv "$PREFIX/nuemac.new" "$PREFIX/nuemac"
 fi
 install -m 755 "$PREFIX/nuemac/bin/nuemac" "$PREFIX/bin/nuemac"
-[ -n "$PORT" ] && echo "PORT=$PORT" > "$PREFIX/settings"
+if [ -n "$PORT" ]; then   # replace only the PORT line: other settings (MODEL_PATH, SERVER_ARGS) survive an update
+  { grep -v '^PORT=' "$PREFIX/settings" 2>/dev/null || true; echo "PORT=$PORT"; } > "$PREFIX/settings.new"
+  mv "$PREFIX/settings.new" "$PREFIX/settings"
+fi
 echo "$MODEL" > "$PREFIX/active"
 
 verify() { # file sha256

@@ -23,12 +23,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# MLX ends a Metal command buffer after 40 ops (or 40 MB of bound arrays) on M4 / M4 Pro. A decode step is thousands of
+# small kernels, so the default commits dozens of buffers per token. 200 ops measured best on an M4 Pro: decode +2%,
+# 4 requests at once +5%; 1000 ops was 4% slower. The MB cap stays at MLX's default: it also bounds how much temporary
+# memory one buffer holds, and lifting it made prompt reading slower and ran a 16 GB Mac out of GPU memory.
+# Set before MLX initializes the device; an explicit environment value still wins.
+os.environ.setdefault("MLX_MAX_OPS_PER_BUFFER", "200")
+
 import mlx.core as mx  # noqa: E402
 from mlx_lm.sample_utils import make_sampler  # noqa: E402
 
 from families import ContextFull, for_model  # noqa: E402
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 log = logging.getLogger("nuemac")
 
 BANDS = (4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288)
@@ -171,7 +178,16 @@ class Engine:
             self.decoder = self.family.make_decoder(self.model, options)
         self.dec_seq = None              # the sequence the compiled decoder holds
         self.ctx = ctx
-        self.chunk = prefill_chunk
+        self.chunk = prefill_chunk           # while other sequences decode: they wait ~one chunk between tokens
+        # Nothing decoding: no one waits on a chunk, so a bigger one can read the prompt faster. Measured with
+        # Inkling 2 Mini oQ3e on a 24 GB M4 Pro, 256 -> 1024 tokens: +6-9% prompt speed (1.6K-18K tokens), same
+        # accuracy, +1.1-1.7 GiB peak memory (2048: no faster, +3 GiB). On a 16 GB M4 it was no faster and a 94K
+        # prompt ran out of GPU memory, so "auto" (<= 0) keeps 256 below a 20 GiB GPU limit.
+        alone = int(options.get("prefill_chunk_alone", 0))
+        if alone <= 0:
+            alone = 1024 if self.limit >= 20 * 2**30 else prefill_chunk
+        self.chunk_alone = max(prefill_chunk, alone)
+        self.family_hint("prefill_chunk", self.chunk_alone)
         self.slots = max(1, int(options.get("slots", 4)))
         if not hasattr(self.family, "batch_cache"):
             self.slots = 1
@@ -184,8 +200,15 @@ class Engine:
         self.waiting, self.prefilling, self.decoding = [], [], []
         self.idle = []                   # finished sequences kept for prompt reuse, oldest first
         self.decode_credit = 0.0         # decode time owed before the next prefill chunk
-        log.info("loaded %s: %.2f GiB weights, ctx %d, %d slots, cache budget %.1f GiB, stop ids %s", model_path,
-                 weights / 2**30, ctx, self.slots, self.budget / 2**30, sorted(self.stop_ids))
+        log.info("loaded %s: %.2f GiB weights, ctx %d, %d slots, cache budget %.1f GiB, prefill chunk %d (%d alone), "
+                 "stop ids %s", model_path, weights / 2**30, ctx, self.slots, self.budget / 2**30, self.chunk,
+                 self.chunk_alone, sorted(self.stop_ids))
+
+    def family_hint(self, name, value):
+        """Tell the family an engine setting its cache sizing depends on (if it cares)."""
+        hint = getattr(self.family, "set_hint", None)
+        if hint is not None:
+            hint(name, value)
 
     # -- memory -------------------------------------------------------------------------------------------------
     def _bytes(self, max_len):
@@ -265,7 +288,7 @@ class Engine:
     # -- prefill --------------------------------------------------------------------------------------------------
     def _prefill_chunk(self, req):
         t = time.time()
-        part = req.todo[: self.chunk]
+        part = req.todo[: self.chunk if self.decoding else self.chunk_alone]
         h = self.model.model(mx.array(part)[None], req.cache)
         logits = self.model.logits_from_hidden(h[:, -1:, :])[:, -1, :]
         mx.eval(logits)
@@ -281,6 +304,9 @@ class Engine:
             self._finish(req, "stop")
             return
         if not req.todo:
+            log.info("prompt read: %d tokens in %.1f s, peak GPU memory %.2f GiB", len(req.tokens) - req.reused,
+                     req.t_prompt, mx.get_peak_memory() / 2**30)
+            mx.reset_peak_memory()
             req.snap = (len(req.tokens), self.family.snapshot(req.cache))
             req.y = req.sampler(logits)
             mx.eval(req.y)
@@ -757,7 +783,11 @@ def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--ctx", type=int, default=98304)
-    ap.add_argument("--prefill-chunk", type=int, default=256)
+    ap.add_argument("--prefill-chunk", type=int, default=256,
+                    help="prompt tokens per step while other requests are generating (they wait about one step)")
+    ap.add_argument("--prefill-chunk-alone", type=int, default=0,
+                    help="prompt tokens per step when no request is generating; 0 = auto (1024 with a GPU limit of "
+                         "20 GiB or more, else --prefill-chunk)")
     ap.add_argument("--expect-omlx", default="", help="oMLX version the model's recipe was tested with")
     ap.add_argument("--slots", type=int, default=4,
                     help="most sequences decoding at once (continuous batching); 1 = one request at a time")
@@ -778,7 +808,7 @@ def main():
     WORKER = EngineThread(a.model, a.ctx, a.prefill_chunk,
                           {"expect_omlx": a.expect_omlx, "head_bits": a.head_bits, "attn_bits": a.attn_bits,
                            "compiled_decode": not a.no_compiled_decode, "slots": a.slots, "draft": a.draft,
-                           "keep_caches": a.keep_caches})
+                           "keep_caches": a.keep_caches, "prefill_chunk_alone": a.prefill_chunk_alone})
     WORKER.start()
     WORKER.ready.wait()
     if WORKER.error is not None:

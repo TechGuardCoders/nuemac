@@ -171,6 +171,11 @@ repeats its context, such as a rewritten file, is drafted from it (`--draft`, on
 | `nuemac stop` / `start` / `restart` / `logs` | the server |
 | `nuemac uninstall` | remove the login service (files stay in `~/.nuemac`) |
 
+Settings live in `~/.nuemac/settings` (shell `KEY=value` lines; `nuemac restart` after a change):
+`PORT`, `SERVER_ARGS` (extra `engine/server.py` options, e.g. `--slots 2`), and `MODEL_PATH`, a folder holding
+your own build of the active model (same family, e.g. a different quantization) to serve instead of the
+downloaded weights.
+
 ## Repository
 
 ```
