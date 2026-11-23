@@ -38,7 +38,7 @@ from mlx_lm.sample_utils import make_sampler  # noqa: E402
 
 from families import ContextFull, for_model  # noqa: E402
 
-__version__ = "0.7.1"
+__version__ = "0.7.2"
 log = logging.getLogger("nuemac")
 
 BANDS = (4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288)
@@ -71,6 +71,8 @@ class Request:
         self.y = None                    # next token to emit (lazy)
         self.out = []
         self.max_len = 0
+        self.want = 0                    # prompt + max_tokens: the most keys this reply can need
+        self.paused = False              # waiting for memory to grow its cache
         self.t1 = 0.0
         self.t_prompt = 0.0
         self.drafter = None              # CopyDrafter while this request decodes alone
@@ -181,8 +183,9 @@ class Engine:
       and each row's attention against its own cache (family.batch_cache). One sequence alone uses the compiled
       decode step.
     - Prompts prefill in chunks between decode steps, taking turns so decoding users keep getting tokens.
-    - Admission: at most `slots` sequences, and their caches (sized to prompt + max_tokens, in BANDS) must fit
-      the memory budget. Finished sequences' caches stay for prompt reuse while memory allows (`keep`)."""
+    - Admission: at most `slots` sequences, and their caches must fit the memory budget. A cache starts at prompt +
+      min(max_tokens, reply_reserve) (in BANDS) and grows a band at a time while the reply runs on, so a request
+      without a max_tokens (no cap: up to the context) doesn't hold memory other users could start with. Finished sequences' caches stay for prompt reuse while memory allows (`keep`)."""
 
     def __init__(self, model_path, ctx, prefill_chunk, options=None):
         options = options or {}
@@ -213,6 +216,7 @@ class Engine:
         if not hasattr(self.family, "batch_cache"):
             self.slots = 1
         self.keep = max(0, int(options.get("keep_caches", 2)))
+        self.reply_reserve = max(256, int(options.get("reply_reserve", 8192)))
         self.draft = options.get("draft", "copy") == "copy" and not os.environ.get("NUEMAC_NO_DRAFT")
         weights = mx.get_active_memory()
         self.budget = self.limit - weights - int(float(options.get("reserve_gb", 1.5)) * 2**30)
@@ -285,7 +289,8 @@ class Engine:
                     self.waiting.pop(0)
                     req.events.put(("error", ContextFull(f"prompt is {len(req.ids)} tokens; context is {self.ctx}")))
                     continue
-            need = band_for(len(req.ids) + req.max_tokens, self.ctx)
+            req.want = len(req.ids) + req.max_tokens
+            need = band_for(len(req.ids) + min(req.max_tokens, self.reply_reserve), self.ctx)
             # memory first: a new cache (or a reused one grown to `need`) must fit beside the running ones
             cand = self._peek_reusable(req) if req.cache_prompt else None
             new_bytes = self._bytes(need) - (self._bytes(cand.max_len) if cand is not None else 0)
@@ -433,16 +438,47 @@ class Engine:
                 return True
         return True
 
+    GROW_MARGIN = 64                     # grow a cache this many keys before it fills (drafts need room too)
+
+    def _grow(self):
+        """Give replies running past their cache's length the next band. Without the memory for it, a reply waits
+        while others run on (they finish and free memory); one with nobody else running grows regardless, as
+        admission does."""
+        for r in list(self.decoding):
+            if len(r.tokens) + self.GROW_MARGIN < r.max_len or r.max_len >= min(r.want, self.ctx):
+                r.paused = False
+                continue
+            need = band_for(min(len(r.tokens) + self.GROW_MARGIN + 1, r.want), self.ctx)
+            others = [x for x in self.decoding + self.prefilling if x is not r and not x.paused]
+            while self._in_use() + self._bytes(need) > self.budget and self.idle:
+                self.idle.pop(0)
+                mx.clear_cache()
+            if self._in_use() + self._bytes(need) > self.budget and others:
+                if not r.paused:
+                    log.info("reply at %d tokens waits for memory to grow its cache", len(r.out))
+                r.paused = True
+                continue
+            if self.dec_seq is r:
+                self._use_decoder(None)       # the compiled decoder holds the buffers; give them back first
+            self.family.fit_cache(r.cache, need)
+            log.info("reply at %d tokens: cache %d -> %d keys", len(r.out), r.max_len, need)
+            r.max_len, r.paused = need, False
+
     def _decode_step(self):
         t = time.time()
-        if (self.draft and len(self.decoding) == 1 and not self.prefilling and not self.waiting
+        self._grow()
+        running = [r for r in self.decoding if not r.paused]
+        if not running:                       # every reply waits for memory: let the prompts being read go on
+            self.decode_credit = 0
+            return
+        if (self.draft and len(self.decoding) == 1 and running and not self.prefilling and not self.waiting
                 and len(self.decoding[0].out) + 3 < self.decoding[0].max_tokens):
             if self._draft_step(self.decoding[0]):
                 self.decode_credit -= time.time() - t
                 return
         # a sequence about to emit its last allowed token is not stepped (its cache has no room past it)
-        last = [r for r in self.decoding if len(r.out) + 1 >= r.max_tokens]
-        step = [r for r in self.decoding if r not in last]
+        last = [r for r in running if len(r.out) + 1 >= r.max_tokens]
+        step = [r for r in running if r not in last]
         nxts = []
         if step:
             if len(step) == 1 and self.decoder is not None:
@@ -798,7 +834,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def chat(self, body):
         ids, images = self._prompt_ids(body)
-        max_tokens = int(body.get("max_tokens") or body.get("max_completion_tokens") or 4096)
+        # no max_tokens: no cap, the reply may run to the end of the context (admission trims it to what's left)
+        max_tokens = int(body.get("max_tokens") or body.get("max_completion_tokens") or ENGINE.ctx)
         stream = bool(body.get("stream", False))
         parser = ENGINE.family.output_parser(ENGINE.tok, ENGINE.model_path)
         router = ThinkRouter()
@@ -924,6 +961,8 @@ def main():
                     help="most sequences decoding at once (continuous batching); 1 = one request at a time")
     ap.add_argument("--keep-caches", type=int, default=2,
                     help="finished conversations whose caches stay for prompt reuse (memory permitting)")
+    ap.add_argument("--reply-reserve", type=int, default=8192,
+                    help="reply tokens a request's cache starts with; it grows past this as the reply runs on")
     ap.add_argument("--draft", default="copy", choices=("copy", "off"),
                     help="copy: draft tokens from the context while one request decodes alone (rewrites, edits)")
     ap.add_argument("--no-compiled-decode", action="store_true",
@@ -948,7 +987,8 @@ def main():
     WORKER = EngineThread(a.model, a.ctx, a.prefill_chunk,
                           {"expect_omlx": a.expect_omlx, "head_bits": a.head_bits, "attn_bits": a.attn_bits,
                            "compiled_decode": not a.no_compiled_decode, "slots": a.slots, "draft": a.draft,
-                           "keep_caches": a.keep_caches, "prefill_chunk_alone": a.prefill_chunk_alone,
+                           "keep_caches": a.keep_caches, "reply_reserve": a.reply_reserve,
+                           "prefill_chunk_alone": a.prefill_chunk_alone,
                            "vision_bits": a.vision_bits, "vision": a.vision})
     WORKER.start()
     WORKER.ready.wait()

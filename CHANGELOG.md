@@ -2,6 +2,14 @@
 
 Speeds are from `nuemac bench`: a base Mac mini M4 (10-core GPU, 16 GB) at 96K context unless a line says otherwise.
 
+## 0.7.2 - 2026-11-23: no output cap
+
+- A chat request without `max_tokens` is no longer cut at 4,096 tokens: the reply may run to the end of the
+  context. Long answers (a whole web page, a rewritten file) came back cut off.
+- Caches start at prompt + min(`max_tokens`, 8192) and grow a band at a time as the reply runs on, so a long or
+  uncapped request doesn't hold memory other users could start with. Without memory to grow, a reply waits while
+  the others run on; alone, it always grows. `--reply-reserve N` sets the starting size.
+
 ## 0.7.1 - 2026-11-23: a better 16 GB model, agent installs
 
 - New 16 GB default model `inkling-2-mini-tg`: [Techguardai/Inkling-2-Mini-TG-MLX](https://huggingface.co/Techguardai/Inkling-2-Mini-TG-MLX), Tech Guard's 11.2 GB

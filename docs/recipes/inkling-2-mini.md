@@ -346,8 +346,10 @@ iteration-level scheduling vLLM uses, and long prompts prefill in 256-token chun
 
 - **An engine thread owns every MLX call.** HTTP threads hand it a request and read back events (streamed text,
   done, error); a client that disconnects cancels its request.
-- **Each sequence keeps its own caches**, sized to prompt + `max_tokens` in bands (4K, 8K, 16K ... up to the
-  context). A request whose cache would not fit the memory budget waits for a running one to finish. Finished
+- **Each sequence keeps its own caches**, in bands (4K, 8K, 16K ... up to the context). A cache starts at prompt +
+  min(`max_tokens`, 8192) and grows a band at a time while the reply runs on (0.7.2; `--reply-reserve`). A request
+  without `max_tokens` has no cap: it may run to the end of the context. A request whose cache would not fit the
+  memory budget waits for a running one to finish; a reply that can't grow waits while others run on. Finished
   conversations' caches stay (`--keep-caches`, default 2) for prompt reuse while memory allows.
 - **One request alone runs the compiled decode step**, so it is as fast as 0.4.0 and gives the same text. With two
   or more, a batched step runs the projections, experts and head for all rows at once, and every row's attention
