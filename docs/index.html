@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nuemac: private inference at the edge</title>
-<meta name="description" content="Nuemac: private inference at the edge. A local LLM engine that brings 16 GB Macs to life. Inkling 2 Mini at 25.9 tok/s with a 96K context on a base 16 GB M4 Mac mini, up to 4 requests at once.">
+<meta name="description" content="Nuemac: private inference at the edge. A local LLM engine that brings 16 GB Macs to life. Inkling 2 Mini at 25.9 tok/s with a 96K context on a base 16 GB M4 Mac mini, up to 4 requests at once, now reading images.">
 <meta property="og:title" content="Nuemac: private inference at the edge">
-<meta property="og:description" content="Inkling 2 Mini at 25.9 tok/s with a 96K context on a base 16 GB M4 Mac mini. Up to 4 requests at once. One command. MLX with custom Metal kernels.">
+<meta property="og:description" content="Inkling 2 Mini at 25.9 tok/s with a 96K context on a base 16 GB M4 Mac mini. Up to 4 requests at once. Reads images. One command. MLX with custom Metal kernels.">
 <meta property="og:image" content="https://techguardcoders.github.io/nuemac/assets/infographic.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="assets/tg-monogram.png">
@@ -108,6 +108,7 @@ footer img{height:16px;opacity:.8}
   nav .links{gap:12px}
   .big{font-size:72px}
 }
+@media (max-width:1000px){ nav .links a.hide-md{display:none} }
 @media (max-width:420px){ nav .links a.hide-sm{display:none} }
 </style>
 </head>
@@ -121,6 +122,8 @@ footer img{height:16px;opacity:.8}
         <a href="#why">Why it's different</a>
         <a href="#numbers" class="hide-sm">Numbers</a>
         <a href="#concurrency" class="hide-sm">Several users</a>
+        <a href="#agents" class="hide-md">Agents &amp; images</a>
+        <a href="#vs" class="hide-md">vs mlx-serve</a>
         <a href="#how" class="hide-sm">How it works</a>
         <a href="https://github.com/TechGuardCoders/nuemac">GitHub</a>
       </div>
@@ -145,9 +148,10 @@ footer img{height:16px;opacity:.8}
           <div><b>191</b><span>tok/s prompt reading, 2.8× llama.cpp</span></div>
           <div><b>$0</b><span>per token, runs on your Mac</span></div>
         </div>
-        <div class="sub" style="margin-top:18px">On a 24 GB Mac mini M4 Pro: <b>42.3 tok/s</b> with a <b>256K</b> context. The installer picks the build for your Mac's memory.</div>
-        <div class="sub" style="margin-top:8px">Up to 4 requests at once: <b>36.3 tok/s</b> total on the 16 GB mini, <b>60.4 tok/s</b> on the M4 Pro. <a href="#concurrency">How</a></div>
-        <div class="sub" style="margin-top:8px">Rewriting a file: <b>66-72 tok/s</b> on the M4 Pro, drafted from the file itself (0.6.0).</div>
+        <div class="sub" style="margin-top:18px">On a 24 GB Mac mini M4 Pro: <b>42.5 tok/s</b> with a <b>256K</b> context, prompts read at <b>337-349 tok/s</b>. The installer picks the build for your Mac's memory.</div>
+        <div class="sub" style="margin-top:8px">Up to 4 requests at once: <b>36.3 tok/s</b> total on the 16 GB mini, <b>61.5 tok/s</b> on the M4 Pro. <a href="#concurrency">How</a></div>
+        <div class="sub" style="margin-top:8px">Rewriting a file: <b>69 tok/s</b> on the M4 Pro, drafted from the file itself.</div>
+        <div class="sub" style="margin-top:8px"><b>Reads images</b> (0.7.0), and an agent's next turn starts in <b>0.5 s</b>: the conversation stays cached. <a href="#agents">How</a></div>
       </div>
     </div>
   </div>
@@ -217,6 +221,64 @@ footer img{height:16px;opacity:.8}
     </div>
     <p class="note">One request alone also drafts from its context (0.6.0): when a reply repeats something already in the conversation, such as a file being rewritten or edited, the next tokens are read off the earlier copy and checked up to 16 at a time. A 240-line file rewrite on the M4 Pro goes from 40.8 to 66-72 tok/s; prose is unchanged. Details: <a href="https://github.com/TechGuardCoders/nuemac/blob/main/docs/recipes/inkling-2-mini.md#copy-drafting-060">recipe</a>.</p>
     <p class="note">Why 4 requests give ~1.4&times; and not 4&times;: each one picks its own 8 of 128 experts per layer pass, so 4 together read ~3.7&times; the expert weights of one. Attention is only ~14% of a step; batching it into one kernel launch (adapted from <a href="https://github.com/ddalcu/mlx-serve">mlx-serve</a>, MIT) cut the step 4.5%. Rows in a batch round slightly differently than alone, so greedy text can drift from a solo run, as in other batching servers. Raw numbers: <a href="https://github.com/TechGuardCoders/nuemac/blob/main/results/2026-11-22-nuemac-0.5.0-concurrency.json">results/</a>.</p>
+  </div>
+</section>
+
+<section id="agents">
+  <div class="wrap">
+    <h2>Built for agents, and it reads images</h2>
+    <p class="intro">An agent resends its whole conversation every turn. Nuemac keeps each conversation's cache, and its windowed 8-bit layout is ~17 KB per token against ~192 KB in a stock layout, so there is room to keep it: a new turn reads only the new tokens. Same 24 GB M4 Pro, same weights, a 10.9K-token system prompt and six turns:</p>
+    <div class="cmp-wrap">
+      <table class="cmp">
+        <thead><tr><th>Agent session, M4 Pro 24 GB</th><th>mlx-serve</th><th class="us">Nuemac</th></tr></thead>
+        <tbody>
+          <tr><td>First turn, time to first token</td><td>29.4 s</td><td class="us">32.3 s</td></tr>
+          <tr><td>Each later turn, time to first token</td><td>30.2 s (prompt read again)</td><td class="us">0.5 s (10.9K tokens reused)</td></tr>
+          <tr><td>Six turns in all</td><td>195 s</td><td class="us">52 s</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">mlx-serve sizes its prompt cache from what its context reservation leaves; on 24 GB that came to 0-236 MB at a 64K-256K context, too small for these prompts even with <code style="font:13px JetBrains Mono,monospace">--prefix-cache-mem 6GB</code>.</p>
+    <div class="findings">
+      <div class="card"><h3>Images in, same API</h3><p>Send OpenAI-style <code>image_url</code> parts (base64 or http links). Each 40 px block of an image is one prompt token: a 1280&times;720 screenshot is 576. Checked 6/6 on both Macs: an invoice's number and total, colors and positions, counting, the open tickets in a screenshot, a follow-up that reuses the cached image, and a different image that must not.</p></div>
+      <div class="card"><h3>No memory tax on 16 GB</h3><p>The vision tower (8-bit, 325 MiB, cosine 0.997-0.999 against the released weights) loads when an image arrives, in 0.1-0.3 s, and is freed afterwards. Kept loaded, it cut decode at a 94K-token prompt from 15.1 to 12.2 tok/s; loaded per image, text keeps its full speed.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="vs">
+  <div class="wrap">
+    <h2>Against the fastest MLX engine</h2>
+    <p class="intro"><a href="https://github.com/ddalcu/mlx-serve">mlx-serve</a> is a native MLX server with its own Inkling 2 kernels. Same 24 GB M4 Pro, same oQ3e weights (converted losslessly to its layout), its drafter off (faster on this Mac). Where it wins, we say so.</p>
+    <div class="cmp-wrap">
+      <table class="cmp">
+        <thead><tr><th>M4 Pro 24 GB, same weights</th><th>mlx-serve</th><th class="us">Nuemac</th></tr></thead>
+        <tbody>
+          <tr><td>Decode, one request</td><td><b style="color:#fff">47.7 tok/s</b> &middot; faster</td><td class="us">42.5 tok/s</td></tr>
+          <tr><td>4 requests at once, total</td><td><b style="color:#fff">70.4 tok/s</b> &middot; faster</td><td class="us">61.5 tok/s</td></tr>
+          <tr><td>Prompt reading, 24K tokens</td><td><b style="color:#fff">369 tok/s</b> &middot; faster</td><td class="us">325 tok/s</td></tr>
+          <tr><td>Rewriting a 240-line file</td><td>43.7 tok/s</td><td class="us">69.4 tok/s</td></tr>
+          <tr><td>Six-turn agent session</td><td>195 s</td><td class="us">52 s</td></tr>
+          <tr><td>Agreement with the released model</td><td>94.6%</td><td class="us">94.5%</td></tr>
+          <tr><td>Quality check, tool calls, needle at 24K</td><td>12/12, 6/6, found</td><td class="us">12/12, 6/6, found</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">The two engines pick the same next token 98.8% of the time, so the engine costs no accuracy. mlx-serve's decode lead comes from native dispatch and fused kernels, and is on our list. On a 16 GB M4 it could not take a 94K-token prompt and ran four requests one after another. Raw numbers: <a href="https://github.com/TechGuardCoders/nuemac/blob/main/results/2026-11-23-nuemac-0.7.0-images-agents-vs-mlx-serve.json">results/</a>.</p>
+    <h2 style="margin-top:40px">How close to the full model</h2>
+    <p class="intro">Top-1 agreement and KL against the released model's own top-20 log-probabilities, 20 prompts, 10,490 reply tokens, same method for every row.</p>
+    <div class="cmp-wrap">
+      <table class="cmp">
+        <thead><tr><th>Build</th><th>Size</th><th>Top-1 agreement</th><th>KL</th></tr></thead>
+        <tbody>
+          <tr><td>mlx-community oQ2.5e (16 GB download)</td><td>10.9 GB</td><td>91.1%</td><td>0.099</td></tr>
+          <tr><td class="us">Tech Guard custom build (sensitivity-allocated experts)</td><td class="us">11.2 GB</td><td class="us">94.2%</td><td class="us">0.041</td></tr>
+          <tr><td>mlx-community oQ3e (24 GB download)</td><td>12.3 GB</td><td>94.4%</td><td>0.040</td></tr>
+          <tr><td>mlx-community oQ4e</td><td>16 GB</td><td>95.6%</td><td>0.024</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">The custom build reaches oQ3e's accuracy at a size that runs a 96K context on a 16 GB M4: 27.1 tok/s decode, 37.0 total at 4 requests, 44.7 rewriting, a 94K-token prompt in 712 s with the needle found, images included. It is not published yet; <code style="font:13px JetBrains Mono,monospace">MODEL_PATH</code> serves your own build.</p>
   </div>
 </section>
 

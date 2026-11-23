@@ -1,0 +1,582 @@
+{
+ "date": "2026-11-23",
+ "notes": [
+  "Speeds from streamed /v1/chat/completions (ms_bench / agentloop / vistest harnesses), temperature 0, reasoning_effort low.",
+  "Same weights on both engines in each M4 Pro comparison: mlx-community Inkling-2-Mini-oQ3e, converted losslessly to mlx-lm layout for mlx-serve (vision tensors dropped, served with --no-vision --no-mtp).",
+  "mlx-serve v26.11.4-pre-release.1. Nuemac 0.6.1 (text) / 0.7.0 (images); 0.7.0 does not change text speed.",
+  "16 GB rows use a custom 11.2 GB Inkling 2 Mini build (tg-rt-11.2v: sensitivity-allocated 2-4 bit experts + the released vision tower), not yet published."
+ ],
+ "m4pro_24gb": {
+  "nuemac": {
+   "bench_24k": {
+    "prose": 42.48,
+    "code": 41.86,
+    "rewrite": 69.39,
+    "four_at_once": 61.48,
+    "four_wall": 26.4,
+    "qa": "12/12",
+    "depth": {
+     "prompt_tokens": 24106,
+     "ttft_s": 74.3,
+     "prefill_tok_s": 324.6,
+     "decode": 34.77,
+     "needle": true,
+     "free_pct_before": 36,
+     "free_pct_after": 32
+    },
+    "free_pct_end": 33
+   },
+   "agent_session": {
+    "turns": [
+     {
+      "turn": 1,
+      "prompt": 10872,
+      "cached": 0,
+      "ttft": 32.31,
+      "total": 34.97
+     },
+     {
+      "turn": 2,
+      "prompt": 10931,
+      "cached": 10872,
+      "ttft": 0.66,
+      "total": 1.53
+     },
+     {
+      "turn": 3,
+      "prompt": 10955,
+      "cached": 10931,
+      "ttft": 0.4,
+      "total": 3.29
+     },
+     {
+      "turn": 4,
+      "prompt": 10994,
+      "cached": 10955,
+      "ttft": 0.52,
+      "total": 3.14
+     },
+     {
+      "turn": 5,
+      "prompt": 11019,
+      "cached": 10994,
+      "ttft": 0.4,
+      "total": 4.61
+     },
+     {
+      "turn": 6,
+      "prompt": 11051,
+      "cached": 11019,
+      "ttft": 0.46,
+      "total": 4.41
+     }
+    ],
+    "first_ttft": 32.31,
+    "later_ttft_mean": 0.49,
+    "turns_total_s": 52.0
+   },
+   "tool_calls": "6/6",
+   "vision": [
+    {
+     "case": "read text",
+     "ok": true,
+     "s": 3.08,
+     "prompt_tokens": 176,
+     "cached": 0,
+     "text": "Invoice #4417; total due $1,284.50."
+    },
+    {
+     "case": "colors",
+     "ok": true,
+     "s": 2.2,
+     "prompt_tokens": 154,
+     "cached": 0,
+     "text": "The circle is red, and it is on the left."
+    },
+    {
+     "case": "count",
+     "ok": true,
+     "s": 1.96,
+     "prompt_tokens": 97,
+     "cached": 0,
+     "text": "5"
+    },
+    {
+     "case": "screenshot",
+     "ok": true,
+     "s": 4.05,
+     "prompt_tokens": 668,
+     "cached": 0,
+     "text": "#2291, #2292, #2294"
+    },
+    {
+     "case": "same image",
+     "ok": true,
+     "s": 2.11,
+     "prompt_tokens": 184,
+     "cached": 169,
+     "text": "The customer is Harbor Dental Group."
+    },
+    {
+     "case": "other image",
+     "ok": true,
+     "s": 4.77,
+     "prompt_tokens": 90,
+     "cached": 0,
+     "text": "There\u2019s no invoice number visible in the image\u2014only three black dots. If the dots are meant to represent a count, that\u2019s 3, but it isn\u2019t an invoice number."
+    }
+   ]
+  },
+  "mlx_serve": {
+   "bench_24k": {
+    "prose": 47.69,
+    "code": 47.67,
+    "rewrite": 43.65,
+    "four_at_once": 70.41,
+    "four_wall": 23.3,
+    "qa": "12/12",
+    "depth": {
+     "prompt_tokens": 24106,
+     "ttft_s": 65.2,
+     "prefill_tok_s": 369.4,
+     "decode": 39.42,
+     "needle": true,
+     "free_pct_before": 41,
+     "free_pct_after": 34
+    },
+    "free_pct_end": 34
+   },
+   "needle_90k": {
+    "prompt_tokens": 90271,
+    "ttft_s": 303.8,
+    "prefill_tok_s": 297.1,
+    "decode": 24.91,
+    "needle": true,
+    "free_pct_before": 40,
+    "free_pct_after": 23
+   },
+   "agent_session_default": {
+    "turns": [
+     {
+      "turn": 1,
+      "prompt": 10872,
+      "cached": 0,
+      "ttft": 29.39,
+      "total": 31.98
+     },
+     {
+      "turn": 2,
+      "prompt": 10994,
+      "cached": 0,
+      "ttft": 30.11,
+      "total": 31.0
+     },
+     {
+      "turn": 3,
+      "prompt": 11049,
+      "cached": 0,
+      "ttft": 30.05,
+      "total": 33.39
+     },
+     {
+      "turn": 4,
+      "prompt": 11201,
+      "cached": 0,
+      "ttft": 29.95,
+      "total": 32.46
+     },
+     {
+      "turn": 5,
+      "prompt": 11321,
+      "cached": 0,
+      "ttft": 30.3,
+      "total": 33.95
+     },
+     {
+      "turn": 6,
+      "prompt": 11485,
+      "cached": 0,
+      "ttft": 30.6,
+      "total": 34.38
+     }
+    ],
+    "first_ttft": 29.39,
+    "later_ttft_mean": 30.2,
+    "turns_total_s": 197.2
+   },
+   "agent_session_6gb_prefix_cache": {
+    "turns": [
+     {
+      "turn": 1,
+      "prompt": 10872,
+      "cached": 0,
+      "ttft": 29.01,
+      "total": 31.59
+     },
+     {
+      "turn": 2,
+      "prompt": 10994,
+      "cached": 0,
+      "ttft": 29.25,
+      "total": 30.14
+     },
+     {
+      "turn": 3,
+      "prompt": 11049,
+      "cached": 0,
+      "ttft": 29.38,
+      "total": 32.72
+     },
+     {
+      "turn": 4,
+      "prompt": 11201,
+      "cached": 0,
+      "ttft": 29.75,
+      "total": 32.26
+     },
+     {
+      "turn": 5,
+      "prompt": 11321,
+      "cached": 0,
+      "ttft": 30.2,
+      "total": 33.84
+     },
+     {
+      "turn": 6,
+      "prompt": 11485,
+      "cached": 0,
+      "ttft": 30.6,
+      "total": 34.37
+     }
+    ],
+    "first_ttft": 29.01,
+    "later_ttft_mean": 29.84,
+    "turns_total_s": 194.9
+   },
+   "agent_session_64k_ctx_6gb_prefix_cache": {
+    "turns": [
+     {
+      "turn": 1,
+      "prompt": 10872,
+      "cached": 0,
+      "ttft": 29.01,
+      "total": 31.6
+     },
+     {
+      "turn": 2,
+      "prompt": 10994,
+      "cached": 0,
+      "ttft": 29.4,
+      "total": 30.3
+     },
+     {
+      "turn": 3,
+      "prompt": 11049,
+      "cached": 0,
+      "ttft": 30.09,
+      "total": 33.44
+     },
+     {
+      "turn": 4,
+      "prompt": 11201,
+      "cached": 0,
+      "ttft": 30.12,
+      "total": 32.63
+     },
+     {
+      "turn": 5,
+      "prompt": 11321,
+      "cached": 0,
+      "ttft": 30.27,
+      "total": 33.91
+     },
+     {
+      "turn": 6,
+      "prompt": 11485,
+      "cached": 0,
+      "ttft": 30.6,
+      "total": 34.38
+     }
+    ],
+    "first_ttft": 29.01,
+    "later_ttft_mean": 30.1,
+    "turns_total_s": 196.3
+   },
+   "tool_calls": "6/6"
+  },
+  "accuracy_vs_release": {
+   "nuemac_oq3e": {
+    "top1_pct": 94.52,
+    "kl_top20": 0.0412,
+    "ppl_increase_pct": 4.35
+   },
+   "mlx_serve_oq3e": {
+    "top1_pct": 94.55,
+    "kl_top20": 0.0403,
+    "ppl_increase_pct": 4.3
+   },
+   "engines_vs_each_other": {
+    "top1_match_pct": 98.76,
+    "kl_top20": 0.0018
+   }
+  }
+ },
+ "m4_16gb_custom_11_2gb": {
+  "bench": {
+   "prose": 27.11,
+   "code": 26.19,
+   "rewrite": 44.7,
+   "four_at_once": 36.97,
+   "four_wall": 43.9,
+   "qa": "12/12",
+   "free_pct_end": 14
+  },
+  "needle_94k": {
+   "vision_loaded_per_image": {
+    "prompt_tokens": 94030,
+    "ttft_s": 712.6,
+    "prefill_tok_s": 131.9,
+    "decode": 15.14,
+    "needle": true,
+    "free_pct_before": 18,
+    "free_pct_after": 7
+   },
+   "vision_resident_8bit": {
+    "prompt_tokens": 94030,
+    "ttft_s": 741.9,
+    "prefill_tok_s": 126.7,
+    "decode": 12.23,
+    "needle": true,
+    "free_pct_before": 16,
+    "free_pct_after": 5
+   },
+   "text_only_build": {
+    "prompt_tokens": 94030,
+    "ttft_s": 716.2,
+    "prefill_tok_s": 131.3,
+    "decode": 15.08,
+    "needle": true,
+    "free_pct_before": 15,
+    "free_pct_after": 5
+   }
+  },
+  "vision": {
+   "bf16_resident": [
+    {
+     "case": "read text",
+     "ok": true,
+     "s": 4.17,
+     "prompt_tokens": 176,
+     "cached": 0,
+     "text": "Invoice #4417; total due $1,284.50."
+    },
+    {
+     "case": "colors",
+     "ok": true,
+     "s": 3.5,
+     "prompt_tokens": 154,
+     "cached": 0,
+     "text": "The circle is red, and it is on the left."
+    },
+    {
+     "case": "count",
+     "ok": true,
+     "s": 3.23,
+     "prompt_tokens": 97,
+     "cached": 0,
+     "text": "5"
+    },
+    {
+     "case": "screenshot",
+     "ok": true,
+     "s": 6.82,
+     "prompt_tokens": 668,
+     "cached": 0,
+     "text": "#2291, #2292, #2294"
+    },
+    {
+     "case": "same image",
+     "ok": true,
+     "s": 3.34,
+     "prompt_tokens": 184,
+     "cached": 169,
+     "text": "The customer is Harbor Dental Group."
+    },
+    {
+     "case": "other image",
+     "ok": true,
+     "s": 8.16,
+     "prompt_tokens": 90,
+     "cached": 0,
+     "text": "3"
+    },
+    {
+     "case": "photo",
+     "ok": null,
+     "s": 22.39,
+     "prompt_tokens": 2330,
+     "cached": 0,
+     "text": "A clear turquoise alpine lake is filled with large smooth gray boulders in the shallow water, with a rocky shoreline and pine trees on the right. Snow-capped mountains stretch across the background under a bright, cloudless blue sky."
+    }
+   ],
+   "8bit_resident": [
+    {
+     "case": "read text",
+     "ok": true,
+     "s": 4.15,
+     "prompt_tokens": 176,
+     "cached": 0,
+     "text": "Invoice #4417; total due $1,284.50."
+    },
+    {
+     "case": "colors",
+     "ok": true,
+     "s": 3.48,
+     "prompt_tokens": 154,
+     "cached": 0,
+     "text": "The circle is red, and it is on the left."
+    },
+    {
+     "case": "count",
+     "ok": true,
+     "s": 3.09,
+     "prompt_tokens": 97,
+     "cached": 0,
+     "text": "5"
+    },
+    {
+     "case": "screenshot",
+     "ok": true,
+     "s": 6.66,
+     "prompt_tokens": 668,
+     "cached": 0,
+     "text": "#2291, #2292, #2294"
+    },
+    {
+     "case": "same image",
+     "ok": true,
+     "s": 3.31,
+     "prompt_tokens": 184,
+     "cached": 169,
+     "text": "The customer is Harbor Dental Group."
+    },
+    {
+     "case": "other image",
+     "ok": true,
+     "s": 8.14,
+     "prompt_tokens": 90,
+     "cached": 0,
+     "text": "3"
+    },
+    {
+     "case": "photo",
+     "ok": null,
+     "s": 22.73,
+     "prompt_tokens": 2330,
+     "cached": 0,
+     "text": "A clear turquoise alpine lake is dotted with large smooth gray boulders in the shallow water, with a rocky shoreline and a couple of pine trees on the right. Snow-capped mountains stretch across the background under a bright, cloudless blue sky."
+    }
+   ],
+   "8bit_per_image": [
+    {
+     "case": "read text",
+     "ok": true,
+     "s": 4.52,
+     "prompt_tokens": 176,
+     "cached": 0,
+     "text": "Invoice #4417; total due $1,284.50."
+    },
+    {
+     "case": "colors",
+     "ok": true,
+     "s": 3.68,
+     "prompt_tokens": 154,
+     "cached": 0,
+     "text": "The circle is red, and it is on the left."
+    },
+    {
+     "case": "count",
+     "ok": true,
+     "s": 3.32,
+     "prompt_tokens": 97,
+     "cached": 0,
+     "text": "5"
+    },
+    {
+     "case": "screenshot",
+     "ok": true,
+     "s": 6.84,
+     "prompt_tokens": 668,
+     "cached": 0,
+     "text": "#2291, #2292, #2294"
+    },
+    {
+     "case": "same image",
+     "ok": true,
+     "s": 3.33,
+     "prompt_tokens": 184,
+     "cached": 169,
+     "text": "The customer is Harbor Dental Group."
+    },
+    {
+     "case": "other image",
+     "ok": true,
+     "s": 8.41,
+     "prompt_tokens": 90,
+     "cached": 0,
+     "text": "3"
+    },
+    {
+     "case": "photo",
+     "ok": null,
+     "s": 23.07,
+     "prompt_tokens": 2330,
+     "cached": 0,
+     "text": "A clear turquoise alpine lake is dotted with large smooth gray boulders in the shallow water, with a rocky shoreline and a couple of pine trees on the right. Snow-capped mountains stretch across the background under a bright, cloudless blue sky."
+    }
+   ]
+  },
+  "vision_tower_precision_vs_bf16": {
+   "8bit": {
+    "MiB": 325,
+    "cosine": [
+     0.9972,
+     0.9987
+    ],
+    "rel_err": [
+     0.045,
+     0.07
+    ]
+   },
+   "4bit": {
+    "MiB": 174,
+    "cosine": [
+     0.9465,
+     0.9701
+    ],
+    "rel_err": [
+     0.231,
+     0.314
+    ]
+   }
+  },
+  "accuracy_vs_release": {
+   "method": "20 prompts, 10,490 reply tokens, top-1 agreement / KL against the released model's top-20 logprobs from a hosted provider; same method for both rows",
+   "custom_11_2gb": {
+    "top1_pct": 94.18,
+    "kl": 0.0413,
+    "ppl_increase_pct": 4.47
+   },
+   "mlx_community_oq2_5e": {
+    "top1_pct": 91.1,
+    "kl": 0.099,
+    "ppl_increase_pct": 10.7
+   },
+   "mlx_community_oq3e_12_3gb": {
+    "top1_pct": 94.4,
+    "kl": 0.04,
+    "ppl_increase_pct": 4.3
+   }
+  }
+ }
+}

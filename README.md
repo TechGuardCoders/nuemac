@@ -72,6 +72,27 @@ alone is as fast as before and gives the same text.
 Four requests give ~1.4x, not 4x, because each picks its own experts and together they read ~3.7x the expert
 weights of one. Details: [concurrent requests](docs/recipes/inkling-2-mini.md#concurrent-requests-050).
 
+**Built for agents.** An agent resends its whole conversation every turn. Nuemac keeps each conversation's cache
+(its 8-bit, windowed layout is ~17 KB per token, against ~192 KB in a stock layout), so a new turn reads only the
+new tokens. On the 24 GB M4 Pro, with a 10.9K-token system prompt and six turns:
+
+| agent session, M4 Pro 24 GB, same weights | **Nuemac** | mlx-serve |
+| --- | --- | --- |
+| first turn: time to first token | 32.3 s | 29.4 s |
+| each later turn: time to first token | **0.5 s** (10.9K tokens reused) | 30.2 s (whole prompt read again) |
+| six turns in all | **52 s** | 195 s |
+
+mlx-serve sizes its prompt cache from what its context reservation leaves; on 24 GB that came to 0-236 MB at a
+64K-256K context, too small for any of these prompts even with `--prefix-cache-mem 6GB`.
+
+**It reads images** (0.7.0). Send `image_url` parts (base64 `data:` URLs or http(s) links); each 40 px block of an
+image is one prompt token, so a 1280x720 screenshot is 576. On a 16 GB Mac the vision tower (8-bit, 325 MiB) loads
+when an image arrives, in 0.1-0.3 s, and is freed afterwards, so long text keeps its memory: decode at a 94K-token
+prompt stays at 15.1 tok/s (12.2 with the tower kept loaded). Checks, 6/6 on both Macs: the number and total on an
+invoice, colors and positions, counting, the open tickets in a 1280x800 screenshot, a follow-up question that reuses
+the cached image, and a different image at the same place that must not. A 3840x2160 photo is scaled to 2,304
+tokens and described correctly. [Details](docs/recipes/inkling-2-mini.md#images-070).
+
 **Private by construction.** The server listens on loopback only (`127.0.0.1`). While serving, it held no
 connections beyond its own local clients. Weights are downloaded once, at install. There's no account, no
 telemetry and no per-token bill.
@@ -80,8 +101,8 @@ telemetry and no per-token bill.
 
 | Model | Machine checked | Speed | Recipe |
 | --- | --- | --- | --- |
-| **Inkling 2 Mini** (Thinking Machines), MLX oQ2.5e, 96K context: `inkling-2-mini` | Mac mini M4, 16 GB | **25.9 tok/s** decode, 191 tok/s prefill, 20.7 tok/s at 32K; 36.3 tok/s total at 4 requests; 43.5 tok/s rewriting a file | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
-| **Inkling 2 Mini**, MLX oQ3e, 256K context: `inkling-2-mini-oq3e` | Mac mini M4 Pro, 24 GB | **42.3 tok/s** decode, 318 tok/s prefill, 33.8 tok/s at 32K; 60.4 tok/s total at 4 requests; 66-72 tok/s rewriting a file | [inkling-2-mini, 24 GB](docs/recipes/inkling-2-mini.md#24-gb-m4-pro-256k-context) |
+| **Inkling 2 Mini** (Thinking Machines), MLX oQ2.5e, 96K context, text + images: `inkling-2-mini` | Mac mini M4, 16 GB | **25.9 tok/s** decode, 191 tok/s prefill, 20.7 tok/s at 32K; 36.3 tok/s total at 4 requests; 43.5 tok/s rewriting a file | [inkling-2-mini](docs/recipes/inkling-2-mini.md) |
+| **Inkling 2 Mini**, MLX oQ3e, 256K context, text + images: `inkling-2-mini-oq3e` | Mac mini M4 Pro, 24 GB | **42.5 tok/s** decode, 337-349 tok/s prefill (0.6.1), 34.8 tok/s at 24K, a 120K prompt in 8.2 min; 61.5 tok/s total at 4 requests; 69.4 tok/s rewriting a file | [inkling-2-mini, 24 GB](docs/recipes/inkling-2-mini.md#24-gb-m4-pro-256k-context) |
 
 The installer picks the build for your Mac's memory: the 16 GB build below 24 GB, the 256K build at 24 GB or more.
 
@@ -122,6 +143,44 @@ What Nuemac does for this model (details and every experiment in the [recipe](do
 6. **Copy drafting** (0.6.0): a reply that repeats its context (a rewritten file, an edit) is drafted from that
    context and checked up to 16 tokens at a time: a file rewrite goes 40.8 -> 66-72 tok/s on the M4 Pro and 24.4 -> 43.5
    on the 16 GB M4, prose unchanged. [Details](docs/recipes/inkling-2-mini.md#copy-drafting-060).
+
+## Against the fastest MLX engine (24 GB M4 Pro)
+
+[mlx-serve](https://github.com/ddalcu/mlx-serve) is a native (Zig) MLX server with its own Inkling 2 kernels. Same
+Mac, same oQ3e weights (converted losslessly to its layout), 2026-11-23, mlx-serve v26.11.4-pre-release.1 with its
+drafter off (faster on this Mac). Where it wins, we say so:
+
+| M4 Pro 24 GB, same weights | **Nuemac 0.6.1** | mlx-serve |
+| --- | --- | --- |
+| decode, one request | 42.5 tok/s | **47.7 tok/s** (faster) |
+| 4 requests at once, total | 61.5 tok/s | **70.4 tok/s** (faster) |
+| prompt reading, 24K tokens | 325 tok/s | **369 tok/s** (faster) |
+| rewriting a 240-line file | **69.4 tok/s** (copy drafting) | 43.7 tok/s (its prompt lookup never sped this up) |
+| six-turn agent session above | **52 s** | 195 s |
+| agreement with the released model (top-1, 10,490 tokens) | 94.5% | 94.6% |
+| quality check / tool calls / needle at 24K | 12/12, 6/6, found | 12/12, 6/6, found |
+
+The engines agree with each other on 98.8% of next tokens: the engine costs no accuracy. Its decode lead comes from
+native dispatch and fused kernels, and is on our list. On a 16 GB M4 it could not take a 94K-token prompt (it
+needed 3.8 GB with 2.3 GB free, with an 11.1 GB build) and ran four requests one after another. Raw numbers:
+[`results/2026-11-23-...`](results/2026-11-23-nuemac-0.7.0-images-agents-vs-mlx-serve.json).
+
+## How close to the full model
+
+Agreement with the released model (top-1 next token and KL against its top-20 log-probabilities over 20 prompts,
+10,490 reply tokens), same method for every row:
+
+| build | size | top-1 agreement | KL | perplexity |
+| --- | --- | --- | --- | --- |
+| mlx-community oQ2.5e (the 16 GB download) | 10.9 GB | 91.1% | 0.099 | +10.7% |
+| Tech Guard custom build (sensitivity-allocated 2-4 bit experts) | 11.2 GB | **94.2%** | 0.041 | +4.5% |
+| mlx-community oQ3e (the 24 GB download) | 12.3 GB | 94.4% | 0.040 | +4.3% |
+| mlx-community oQ4e | 16 GB | 95.6% | 0.024 | +2.6% |
+
+The custom build spends bits where measured sensitivity says the model is fragile and fewer where it isn't, and
+reaches oQ3e's accuracy at a size that runs a 96K context on 16 GB (27.1 tok/s decode, 37.0 total at 4 requests,
+44.7 rewriting, a 94K-token prompt in 712 s with the needle found). It is not published yet; serve your own build
+with `MODEL_PATH` (below).
 
 ## Requirements
 
