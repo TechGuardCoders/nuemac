@@ -2,6 +2,15 @@
 
 Speeds are from `nuemac bench`: a base Mac mini M4 (10-core GPU, 16 GB) at 96K context unless a line says otherwise.
 
+## 0.7.3 - 2026-11-23: room for macOS on 16 GB Macs
+
+- The engine plans its memory within RAM minus 3 GiB (`--mem-headroom-gb`), not just the GPU limit. GPU memory is
+  wired, so on a 16 GB Mac (limit 14.5 GB) macOS was left ~1.5 GB: under an agent workload every other process ran
+  from swap (all of them together held 745 MB), and prompts stalled for up to a minute. The cut comes out of the
+  kept-conversation budget (2.3 -> 1.84 GiB on the 16 GB build); one full 96K-token conversation always fits.
+- Below a 20 GiB GPU limit MLX keeps at most 128 MB of freed buffers (was 512 MB, wired and not in the peak
+  figures). 24 GB+ Macs: unchanged (their GPU limit already leaves macOS 3 GB).
+
 ## 0.7.2 - 2026-11-23: no output cap
 
 - A chat request without `max_tokens` is no longer cut at 4,096 tokens: the reply may run to the end of the

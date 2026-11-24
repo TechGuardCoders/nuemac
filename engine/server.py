@@ -38,7 +38,7 @@ from mlx_lm.sample_utils import make_sampler  # noqa: E402
 
 from families import ContextFull, for_model  # noqa: E402
 
-__version__ = "0.7.2"
+__version__ = "0.7.3"
 log = logging.getLogger("nuemac")
 
 BANDS = (4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288)
@@ -191,8 +191,11 @@ class Engine:
         options = options or {}
         info = mx.device_info()
         self.limit = int(info["max_recommended_working_set_size"])
+        small = self.limit < 20 * 2**30
         mx.set_wired_limit(self.limit)
-        mx.set_cache_limit(512 * 2**20)
+        # Freed buffers MLX keeps for reuse stay in memory (wired) and aren't in the peak figures. On a 16 GB Mac
+        # 512 MB of them squeezed macOS into swap; 128 MB keeps the reuse that matters.
+        mx.set_cache_limit((128 if small else 512) * 2**20)
         self.family = for_model(model_path)
         log.info("nuemac %s, family %s", __version__, self.family.NAME)
         self.model_path = model_path
@@ -219,14 +222,33 @@ class Engine:
         self.reply_reserve = max(256, int(options.get("reply_reserve", 8192)))
         self.draft = options.get("draft", "copy") == "copy" and not os.environ.get("NUEMAC_NO_DRAFT")
         weights = mx.get_active_memory()
-        self.budget = self.limit - weights - int(float(options.get("reserve_gb", 1.5)) * 2**30)
+        # Plan for what macOS needs too, not just the GPU limit: GPU memory is wired, so whatever the engine takes
+        # macOS can't page out, and on a 16 GB Mac (limit 14.5 GB) it was left ~1.5 GB: logged-in apps ran from
+        # swap and prompts stalled for a minute at a time. The engine now plans total use <= RAM - headroom (3 GiB
+        # by default; on 24 GB+ Macs that is already the GPU limit, so nothing changes there).
+        mem = int(info.get("memory_size", 0)) or self.limit
+        headroom = float(options.get("headroom_gb", -1))
+        if headroom < 0:
+            headroom = 3.0
+        plan = min(self.limit, mem - int(headroom * 2**30))
+        # what prefill workspaces, a lazily loaded vision tower and MLX's buffer pool need on top of the caches
+        reserve = float(options.get("reserve_gb", -1))
+        if reserve < 0:
+            reserve = 0.8 if small else 1.5
+        self.budget = plan - weights - int(reserve * 2**30)
+        full = self._bytes(band_for(ctx, ctx)) if hasattr(self, "family") else 0
+        if self.budget < full:                  # one full-context conversation must always fit
+            log.warning("memory plan leaves %.2f GiB for caches, a full %d-token context needs %.2f GiB: using that "
+                        "(macOS gets less headroom)", self.budget / 2**30, ctx, full / 2**30)
+            self.budget = full
         self.stop_ids = self.family.stop_ids(self.tok)
         self.inbox = queue.Queue()
         self.waiting, self.prefilling, self.decoding = [], [], []
         self.idle = []                   # finished sequences kept for prompt reuse, oldest first
         self.decode_credit = 0.0         # decode time owed before the next prefill chunk
-        log.info("loaded %s: %.2f GiB weights, ctx %d, %d slots, cache budget %.1f GiB, prefill chunk %d (%d alone), "
-                 "stop ids %s", model_path, weights / 2**30, ctx, self.slots, self.budget / 2**30, self.chunk,
+        log.info("loaded %s: %.2f GiB weights, ctx %d, %d slots, memory plan %.1f of %.1f GiB (GPU limit %.1f), "
+                 "cache budget %.2f GiB, prefill chunk %d (%d alone), stop ids %s", model_path, weights / 2**30, ctx,
+                 self.slots, plan / 2**30, mem / 2**30, self.limit / 2**30, self.budget / 2**30, self.chunk,
                  self.chunk_alone, sorted(self.stop_ids))
 
     def family_hint(self, name, value):
@@ -961,6 +983,9 @@ def main():
                     help="most sequences decoding at once (continuous batching); 1 = one request at a time")
     ap.add_argument("--keep-caches", type=int, default=2,
                     help="finished conversations whose caches stay for prompt reuse (memory permitting)")
+    ap.add_argument("--mem-headroom-gb", type=float, default=-1,
+                    help="memory to leave macOS and other apps; the engine plans its own use within RAM minus this "
+                         "(and the GPU limit). -1 = 3 GiB")
     ap.add_argument("--reply-reserve", type=int, default=8192,
                     help="reply tokens a request's cache starts with; it grows past this as the reply runs on")
     ap.add_argument("--draft", default="copy", choices=("copy", "off"),
@@ -988,6 +1013,7 @@ def main():
                           {"expect_omlx": a.expect_omlx, "head_bits": a.head_bits, "attn_bits": a.attn_bits,
                            "compiled_decode": not a.no_compiled_decode, "slots": a.slots, "draft": a.draft,
                            "keep_caches": a.keep_caches, "reply_reserve": a.reply_reserve,
+                           "headroom_gb": a.mem_headroom_gb,
                            "prefill_chunk_alone": a.prefill_chunk_alone,
                            "vision_bits": a.vision_bits, "vision": a.vision})
     WORKER.start()
